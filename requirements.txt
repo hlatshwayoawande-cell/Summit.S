@@ -1,0 +1,13 @@
+Flask
+Flask-SQLAlchemy
+bcrypt
+python-dotenv
+requests
+yfinance
+gunicorn
+qrcode
+pyotp
+xhtml2pdf
+Pillow
+h11>=0.16.0
+wsproto==1.3.2
