@@ -31,6 +31,7 @@ WALLET_ADDRESS = os.environ.get('WALLET_ADDRESS', '')
 ETHERSCAN_API_KEY = os.environ.get('ETHERSCAN_API_KEY', '')
 BCON_API_KEY = os.environ.get('BCON_API_KEY', '')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 
 MARKET_STOCKS = [
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META',
@@ -166,6 +167,7 @@ class UserPreference(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), unique=True)
     currency = db.Column(db.String(10), default='ZAR')
     language = db.Column(db.String(10), default='en')
+    theme = db.Column(db.String(10), default='dark')
     updated_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Project(db.Model):
@@ -177,6 +179,7 @@ class Project(db.Model):
     notes = db.Column(db.Text, nullable=True)
     due_date = db.Column(db.Date, nullable=True)
     progress = db.Column(db.Integer, default=0)
+    portfolio_id = db.Column(db.Integer, db.ForeignKey('portfolio.id'), nullable=True)
 
 class Income(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -187,6 +190,7 @@ class Income(db.Model):
     notes = db.Column(db.Text, nullable=True)
     is_recurring = db.Column(db.Boolean, default=False)
     frequency = db.Column(db.String(20), default='monthly')
+    portfolio_id = db.Column(db.Integer, db.ForeignKey('portfolio.id'), nullable=True)
 
 class Crypto(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -194,6 +198,7 @@ class Crypto(db.Model):
     coin_name = db.Column(db.String(50), nullable=False)
     amount = db.Column(db.Float, nullable=False)
     value_zar = db.Column(db.Float, nullable=False)
+    portfolio_id = db.Column(db.Integer, db.ForeignKey('portfolio.id'), nullable=True)
 
 class Stock(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -206,6 +211,7 @@ class Stock(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     is_watchlisted = db.Column(db.Boolean, default=False)
     dividend_yield = db.Column(db.Float, nullable=True)
+    portfolio_id = db.Column(db.Integer, db.ForeignKey('portfolio.id'), nullable=True)
 
 class Payment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -238,6 +244,7 @@ class Expense(db.Model):
     is_recurring = db.Column(db.Boolean, default=False)
     frequency = db.Column(db.String(20), default='monthly')
     user = db.relationship('User', backref='expenses')
+    portfolio_id = db.Column(db.Integer, db.ForeignKey('portfolio.id'), nullable=True)
 
 class Milestone(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -279,7 +286,6 @@ class Shoutout(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     user = db.relationship('User', backref='shoutouts')
 
-# ---------- NEW: AUDIT LOG ----------
 class AuditLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
@@ -288,6 +294,30 @@ class AuditLog(db.Model):
     ip_address = db.Column(db.String(50), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     user = db.relationship('User', backref='audit_logs')
+
+class PasswordReset(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    token = db.Column(db.String(100), unique=True)
+    used = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user = db.relationship('User', backref='reset_tokens')
+
+class Budget(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    category = db.Column(db.String(50), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    month = db.Column(db.Integer, nullable=False)
+    year = db.Column(db.Integer, nullable=False)
+    user = db.relationship('User', backref='budgets')
+
+class Portfolio(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user = db.relationship('User', backref='portfolios')
 
 # ---------- HELPER FUNCTIONS ----------
 def generate_referral_code():
@@ -340,7 +370,6 @@ def process_recurring_transactions(user_id):
                 is_recurring=False
             )
             db.session.add(new)
-    
     for expense in Expense.query.filter_by(user_id=user_id, is_recurring=True).all():
         if expense.date.day == today.day:
             new = Expense(
@@ -396,7 +425,7 @@ def create_owner_account():
         )
         db.session.add(owner)
         db.session.commit()
-        pref = UserPreference(user_id=owner.id, currency='ZAR', language='en')
+        pref = UserPreference(user_id=owner.id, currency='ZAR', language='en', theme='dark')
         db.session.add(pref)
         db.session.commit()
         print("✅ Owner account created: owner@summit.app / Summit2026!")
@@ -715,7 +744,9 @@ LANGUAGES = {
 def get_user_preference(user_id, key):
     pref = UserPreference.query.filter_by(user_id=user_id).first()
     if not pref:
-        return 'ZAR' if key == 'currency' else 'en'
+        return 'ZAR' if key == 'currency' else 'en' if key != 'theme' else 'dark'
+    if key == 'theme':
+        return pref.theme or 'dark'
     return pref.currency if key == 'currency' else pref.language
 
 def get_currency_symbol(currency):
@@ -786,7 +817,6 @@ def check_usdc_payment():
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
-# ---------- TELEGRAM BOT ----------
 def send_telegram_message(chat_id, text):
     if not TELEGRAM_TOKEN:
         return
@@ -797,9 +827,22 @@ def send_telegram_message(chat_id, text):
     except:
         pass
 
+# ---------- CONTEXT PROCESSOR ----------
+@app.context_processor
+def inject_pref():
+    pref = None
+    if 'user_id' in session:
+        user = User.query.get(session['user_id'])
+        if user:
+            pref = UserPreference.query.filter_by(user_id=user.id).first()
+    lang = 'en'
+    if pref:
+        lang = pref.language
+    return dict(pref=pref, lang=lang, t=t)
+
 # ---------- BASE HTML ----------
 BASE_HTML = """<!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="{{ pref.theme if pref else 'dark' }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
@@ -833,6 +876,15 @@ BASE_HTML = """<!DOCTYPE html>
             --shadow-color: rgba(0,0,0,0.1);
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 8px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--card-hover); }
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .main { animation: fadeInUp 0.35s ease; }
         body {
             font-family: 'Inter', sans-serif;
             background: var(--bg-primary);
@@ -845,12 +897,10 @@ BASE_HTML = """<!DOCTYPE html>
         [data-theme="light"] body {
             background-image: none;
         }
-
         .app-container {
             display: flex;
             min-height: 100vh;
         }
-
         .sidebar {
             width: 220px;
             background: rgba(20,20,30,0.95);
@@ -872,10 +922,7 @@ BASE_HTML = """<!DOCTYPE html>
         [data-theme="light"] .sidebar {
             background: rgba(255,255,255,0.95);
         }
-        .sidebar.open {
-            transform: translateX(0);
-        }
-
+        .sidebar.open { transform: translateX(0); }
         .sidebar-overlay {
             display: none;
             position: fixed;
@@ -884,10 +931,7 @@ BASE_HTML = """<!DOCTYPE html>
             z-index: 999;
             backdrop-filter: blur(2px);
         }
-        .sidebar-overlay.active {
-            display: block;
-        }
-
+        .sidebar-overlay.active { display: block; }
         .sidebar .logo {
             display: flex;
             align-items: center;
@@ -965,7 +1009,6 @@ BASE_HTML = """<!DOCTYPE html>
             background: rgba(239,68,68,0.15);
             color: #ef4444;
         }
-
         .theme-toggle {
             display: flex;
             align-items: center;
@@ -985,7 +1028,6 @@ BASE_HTML = """<!DOCTYPE html>
             color: var(--text-secondary);
             font-size: 13px;
         }
-
         .main {
             flex: 1;
             padding: 16px;
@@ -996,7 +1038,6 @@ BASE_HTML = """<!DOCTYPE html>
             display: flex;
             flex-direction: column;
         }
-
         .hamburger {
             display: flex;
             flex-direction: column;
@@ -1020,7 +1061,6 @@ BASE_HTML = """<!DOCTYPE html>
         .hamburger.open span:nth-child(1) { transform: rotate(45deg) translate(5px, 5px); }
         .hamburger.open span:nth-child(2) { opacity: 0; }
         .hamburger.open span:nth-child(3) { transform: rotate(-45deg) translate(5px, -5px); }
-
         .card {
             background: var(--bg-card);
             backdrop-filter: blur(12px);
@@ -1033,6 +1073,7 @@ BASE_HTML = """<!DOCTYPE html>
         .card:hover {
             border-color: var(--card-hover);
             box-shadow: 0 8px 40px var(--shadow-color);
+            transform: translateY(-1px);
         }
         .card h3 {
             color: var(--text-primary);
@@ -1040,7 +1081,6 @@ BASE_HTML = """<!DOCTYPE html>
             font-size: 17px;
             font-weight: 600;
         }
-
         .grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -1055,6 +1095,10 @@ BASE_HTML = """<!DOCTYPE html>
             border-radius: 14px;
             transition: all 0.3s;
         }
+        .stat:hover {
+            border-color: var(--card-hover);
+            transform: translateY(-2px);
+        }
         .stat h2 {
             font-size: 24px;
             font-weight: 700;
@@ -1066,7 +1110,6 @@ BASE_HTML = """<!DOCTYPE html>
             font-weight: 500;
             margin-top: 4px;
         }
-
         .btn {
             background: linear-gradient(135deg, #3b82f6, #8b5cf6);
             color: white;
@@ -1085,6 +1128,9 @@ BASE_HTML = """<!DOCTYPE html>
             transform: translateY(-2px);
             box-shadow: 0 8px 30px rgba(59,130,246,0.3);
         }
+        .btn:active {
+            transform: translateY(0);
+        }
         .btn-ghost {
             background: var(--bg-secondary);
             color: var(--text-secondary);
@@ -1094,7 +1140,6 @@ BASE_HTML = """<!DOCTYPE html>
             background: var(--card-hover);
             transform: translateY(-2px);
         }
-
         input, select, textarea {
             width: 100%;
             padding: 11px 14px;
@@ -1111,7 +1156,6 @@ BASE_HTML = """<!DOCTYPE html>
             border-color: #3b82f6;
             box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
         }
-
         .table-wrapper {
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
@@ -1136,7 +1180,6 @@ BASE_HTML = """<!DOCTYPE html>
             font-size: 13px;
         }
         tr:last-child td { border-bottom: none; }
-
         .badge {
             padding: 3px 10px;
             border-radius: 20px;
@@ -1152,7 +1195,6 @@ BASE_HTML = """<!DOCTYPE html>
         .badge-free { background: var(--bg-secondary); color: var(--text-muted); }
         .green { color: #22c55e; }
         .red { color: #ef4444; }
-
         .flash {
             padding: 12px 16px;
             border-radius: 12px;
@@ -1166,7 +1208,6 @@ BASE_HTML = """<!DOCTYPE html>
         .flash-danger { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.15); color: #ef4444; }
         .flash-warning { background: rgba(234,179,8,0.1); border: 1px solid rgba(234,179,8,0.15); color: #facc15; }
         .flash-info { background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.15); color: #60a5fa; }
-
         .progress-bar {
             width: 100%;
             height: 5px;
@@ -1180,7 +1221,6 @@ BASE_HTML = """<!DOCTYPE html>
             border-radius: 10px;
             transition: width 0.3s;
         }
-
         .flex {
             display: flex;
             justify-content: space-between;
@@ -1191,7 +1231,6 @@ BASE_HTML = """<!DOCTYPE html>
         .text-muted { color: var(--text-muted); }
         .mt-10 { margin-top: 10px; }
         .mt-20 { margin-top: 20px; }
-
         .chart-container {
             display: grid;
             grid-template-columns: 1fr;
@@ -1215,7 +1254,6 @@ BASE_HTML = """<!DOCTYPE html>
             max-height: 200px;
             width: 100% !important;
         }
-
         .address-box {
             background: rgba(0,0,0,0.3);
             padding: 12px;
@@ -1226,7 +1264,6 @@ BASE_HTML = """<!DOCTYPE html>
             margin: 10px 0;
             border: 1px solid var(--border-color);
         }
-
         .pricing-card {
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
@@ -1263,7 +1300,6 @@ BASE_HTML = """<!DOCTYPE html>
             content: "✓ ";
             color: #22c55e;
         }
-
         .owner-badge {
             background: linear-gradient(135deg, #f59e0b, #ef4444);
             color: white;
@@ -1273,7 +1309,6 @@ BASE_HTML = """<!DOCTYPE html>
             font-weight: 600;
             margin-left: 6px;
         }
-
         .app-footer {
             margin-top: auto;
             padding-top: 16px;
@@ -1296,7 +1331,6 @@ BASE_HTML = """<!DOCTYPE html>
             color: var(--text-muted);
             font-size: 12px;
         }
-
         .ad-container {
             background: var(--bg-secondary);
             border: 1px dashed var(--border-color);
@@ -1311,7 +1345,6 @@ BASE_HTML = """<!DOCTYPE html>
             color: var(--text-muted);
             font-size: 13px;
         }
-
         .share-card {
             background: var(--bg-primary);
             border-radius: 20px;
@@ -1352,7 +1385,38 @@ BASE_HTML = """<!DOCTYPE html>
             font-weight: 700;
             color: var(--text-primary);
         }
-
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.1);
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .loading-overlay .spinner {
+            width: 50px;
+            height: 50px;
+            border-width: 4px;
+        }
+        .loading-overlay p {
+            color: white;
+            font-size: 16px;
+        }
         @media (min-width: 769px) {
             .sidebar {
                 transform: translateX(0);
@@ -1377,75 +1441,33 @@ BASE_HTML = """<!DOCTYPE html>
                 grid-template-columns: 1fr 1fr;
             }
         }
-
         @media (max-width: 768px) {
-            .main {
-                padding: 12px;
-            }
-            .grid {
-                grid-template-columns: 1fr 1fr;
-                gap: 10px;
-            }
-            .stat {
-                padding: 12px 8px;
-            }
-            .stat h2 {
-                font-size: 20px;
-            }
-            .stat p {
-                font-size: 11px;
-            }
-            .chart-container {
-                grid-template-columns: 1fr;
-            }
-            .card {
-                padding: 14px;
-            }
-            .pricing-card {
-                padding: 16px;
-            }
-            .pricing-card .price {
-                font-size: 28px;
-            }
-            .app-footer {
-                gap: 12px;
-            }
-            .app-footer a {
-                font-size: 11px;
-            }
+            .main { padding: 12px; }
+            .grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .stat { padding: 12px 8px; }
+            .stat h2 { font-size: 20px; }
+            .stat p { font-size: 11px; }
+            .chart-container { grid-template-columns: 1fr; }
+            .card { padding: 14px; }
+            .pricing-card { padding: 16px; }
+            .pricing-card .price { font-size: 28px; }
+            .app-footer { gap: 12px; }
+            .app-footer a { font-size: 11px; }
         }
-
         @media (max-width: 480px) {
-            .grid {
-                grid-template-columns: 1fr 1fr;
-                gap: 8px;
-            }
-            .stat {
-                padding: 10px 6px;
-            }
-            .stat h2 {
-                font-size: 18px;
-            }
-            .stat p {
-                font-size: 10px;
-            }
-            .btn {
-                font-size: 13px;
-                padding: 8px 16px;
-            }
-            .card {
-                padding: 12px;
-            }
-            .main {
-                padding: 8px;
-            }
+            .grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+            .stat { padding: 10px 6px; }
+            .stat h2 { font-size: 18px; }
+            .stat p { font-size: 10px; }
+            .btn { font-size: 13px; padding: 8px 16px; }
+            .card { padding: 12px; }
+            .main { padding: 8px; }
         }
     </style>
 </head>
 <body>
     <div class="app-container">
         <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
-
         <div class="sidebar" id="sidebar">
             <div class="logo">
                 <span class="logo-icon">S</span>
@@ -1480,20 +1502,22 @@ BASE_HTML = """<!DOCTYPE html>
                     <li><a href="{{ url_for('upgrade') }}" {% if request.endpoint == 'upgrade' %}class="active"{% endif %}><span>{{ t('upgrade', lang) }}</span></a></li>
                     <li><a href="{{ url_for('settings') }}" {% if request.endpoint == 'settings' %}class="active"{% endif %}><span>{{ t('settings', lang) }}</span></a></li>
                     <li><a href="{{ url_for('admin') }}" {% if request.endpoint == 'admin' %}class="active"{% endif %}><span>👑 Admin</span></a></li>
+                    <li><a href="{{ url_for('ai_assistant') }}" {% if request.endpoint == 'ai_assistant' %}class="active"{% endif %}><span>🤖 AI Assistant</span></a></li>
+                    <li><a href="{{ url_for('insights') }}" {% if request.endpoint == 'insights' %}class="active"{% endif %}><span>🤖 Insights</span></a></li>
+                    <li><a href="{{ url_for('budgets') }}" {% if request.endpoint == 'budgets' %}class="active"{% endif %}><span>📊 Budgets</span></a></li>
+                    <li><a href="{{ url_for('portfolios') }}" {% if request.endpoint == 'portfolios' %}class="active"{% endif %}><span>📂 Portfolios</span></a></li>
                 </ul>
             </nav>
             <div class="sidebar-footer">
                 <a href="{{ url_for('logout') }}"><span>{{ t('logout', lang) }}</span></a>
             </div>
         </div>
-
         <div class="main">
             <button class="hamburger" id="hamburgerBtn" onclick="toggleSidebar()" aria-label="Toggle menu">
                 <span></span>
                 <span></span>
                 <span></span>
             </button>
-
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
                     {% for category, message in messages %}
@@ -1501,13 +1525,8 @@ BASE_HTML = """<!DOCTYPE html>
                     {% endfor %}
                 {% endif %}
             {% endwith %}
-
-            <div class="ad-container" id="ad-container">
-                <span>📢 Ad Space – Media.net (Pending Approval)</span>
-            </div>
-
+            <div class="ad-container">📢 Ad Space – Media.net (Pending Approval)</div>
             {{ content|safe }}
-
             <div class="app-footer">
                 <a href="{{ url_for('privacy') }}">{{ t('privacy', lang) }}</a>
                 <a href="{{ url_for('terms') }}">{{ t('terms', lang) }}</a>
@@ -1516,18 +1535,10 @@ BASE_HTML = """<!DOCTYPE html>
             </div>
         </div>
     </div>
-
     <script>
-        // PWA Service Worker
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/static/sw.js').then(function(reg) {
-                console.log('✅ Service Worker registered');
-            }).catch(function(err) {
-                console.log('❌ Service Worker error:', err);
-            });
+            navigator.serviceWorker.register('/static/sw.js').catch(() => {});
         }
-
-        // Theme toggle
         function toggleTheme() {
             const html = document.documentElement;
             const current = html.getAttribute('data-theme');
@@ -1535,6 +1546,11 @@ BASE_HTML = """<!DOCTYPE html>
             html.setAttribute('data-theme', newTheme);
             localStorage.setItem('theme', newTheme);
             updateThemeUI(newTheme);
+            fetch('/update-theme', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'theme=' + newTheme
+            });
         }
         function updateThemeUI(theme) {
             const icon = document.getElementById('themeIcon');
@@ -1552,7 +1568,6 @@ BASE_HTML = """<!DOCTYPE html>
             document.documentElement.setAttribute('data-theme', saved);
             updateThemeUI(saved);
         });
-
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
@@ -1561,44 +1576,29 @@ BASE_HTML = """<!DOCTYPE html>
             overlay.classList.toggle('active');
             btn.classList.toggle('open');
         }
-
         document.querySelectorAll('.sidebar nav ul li a').forEach(function(link) {
             link.addEventListener('click', function() {
-                if (window.innerWidth <= 768) {
-                    toggleSidebar();
-                }
+                if (window.innerWidth <= 768) toggleSidebar();
             });
         });
-
         window.addEventListener('resize', function() {
             if (window.innerWidth > 768) {
-                const sidebar = document.getElementById('sidebar');
-                const overlay = document.getElementById('sidebarOverlay');
-                const btn = document.getElementById('hamburgerBtn');
-                sidebar.classList.remove('open');
-                overlay.classList.remove('active');
-                btn.classList.remove('open');
+                document.getElementById('sidebar').classList.remove('open');
+                document.getElementById('sidebarOverlay').classList.remove('active');
+                document.getElementById('hamburgerBtn').classList.remove('open');
             }
         });
-
         function shareProgress() {
             const element = document.getElementById('share-card');
             if (!element) return;
-            
-            html2canvas(element, {
-                scale: 2,
-                backgroundColor: '#0a0a0f',
-                useCORS: true
-            }).then(canvas => {
-                const link = document.createElement('a');
-                link.download = 'summit-progress.png';
-                link.href = canvas.toDataURL('image/png');
-                link.click();
-                alert('📤 Share your progress on social media!');
-            }).catch(err => {
-                alert('❌ Error generating image. Please try again.');
-                console.error(err);
-            });
+            html2canvas(element, { scale: 2, backgroundColor: '#0a0a0f', useCORS: true })
+                .then(canvas => {
+                    const link = document.createElement('a');
+                    link.download = 'summit-progress.png';
+                    link.href = canvas.toDataURL('image/png');
+                    link.click();
+                    alert('📤 Share your progress on social media!');
+                }).catch(() => alert('❌ Error generating image. Please try again.'));
         }
     </script>
 </body>
@@ -1607,32 +1607,44 @@ BASE_HTML = """<!DOCTYPE html>
 
 # ============ ROUTES ============
 
+# ----- INDEX -----
 @app.route('/')
 def index():
     if 'user_id' in session:
         return redirect(url_for('dashboard'))
-    lang = 'en'
     user_count = User.query.count()
     page = f"""
     <div style="text-align:center;padding:60px 20px;background:linear-gradient(135deg,rgba(59,130,246,0.05),rgba(139,92,246,0.05));border-radius:24px;margin-bottom:40px;">
         <h1 style="font-size:52px;font-weight:900;background:linear-gradient(135deg,#3b82f6,#8b5cf6,#ec4899);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Track. Grow. Reach the Summit.</h1>
         <p style="font-size:20px;color:var(--text-secondary);max-width:600px;margin:16px auto 30px;">All your finances. One view. Built for the next generation.</p>
         <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
-            <a href="/signup" class="btn">Sign Up</a>
+            <a href="/signup" class="btn">Start Free</a>
             <a href="/login" class="btn btn-ghost">Login</a>
         </div>
         <p style="color:var(--text-muted);font-size:14px;margin-top:16px;">⭐ Trusted by {user_count} users</p>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:24px;margin-bottom:40px;">
-        <div class="card" style="text-align:center;"><div style="font-size:40px;margin-bottom:8px;">📁</div><h3>Projects</h3><p style="color:var(--text-muted);">Track deadlines and progress</p></div>
-        <div class="card" style="text-align:center;"><div style="font-size:40px;margin-bottom:8px;">💰</div><h3>Income</h3><p style="color:var(--text-muted);">All sources in one place</p></div>
-        <div class="card" style="text-align:center;"><div style="font-size:40px;margin-bottom:8px;">🪙</div><h3>Crypto</h3><p style="color:var(--text-muted);">Live prices and portfolio</p></div>
-        <div class="card" style="text-align:center;"><div style="font-size:40px;margin-bottom:8px;">📊</div><h3>Analytics</h3><p style="color:var(--text-muted);">Insights and export</p></div>
+        <div class="card" style="text-align:center;padding:30px;"><div style="font-size:48px;margin-bottom:12px;">📈</div><h3 style="color:var(--text-primary);">Live Stocks & Crypto</h3><p style="color:var(--text-muted);">30+ stocks, 6 cryptocurrencies, live prices</p></div>
+        <div class="card" style="text-align:center;padding:30px;"><div style="font-size:48px;margin-bottom:12px;">💰</div><h3 style="color:var(--text-primary);">Income & Expenses</h3><p style="color:var(--text-muted);">Track all sources of income and spending</p></div>
+        <div class="card" style="text-align:center;padding:30px;"><div style="font-size:48px;margin-bottom:12px;">📁</div><h3 style="color:var(--text-primary);">Projects & Milestones</h3><p style="color:var(--text-muted);">Track progress, deadlines, and tasks</p></div>
+        <div class="card" style="text-align:center;padding:30px;"><div style="font-size:48px;margin-bottom:12px;">📊</div><h3 style="color:var(--text-primary);">Analytics & Charts</h3><p style="color:var(--text-muted);">Visual insights into your financial health</p></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:40px;">
+        <div style="background:rgba(255,255,255,0.02);border-radius:16px;padding:24px;text-align:center;border:1px solid var(--border-color);">
+            <div style="font-size:36px;margin-bottom:8px;">🎯</div><h3 style="color:var(--text-primary);">Free Plan</h3>
+            <p style="color:var(--text-muted);font-size:14px;">2 projects • Basic analytics • Live prices</p>
+            <p style="color:var(--text-primary);font-weight:700;font-size:20px;margin-top:8px;">R0/month</p>
+        </div>
+        <div style="background:rgba(245,158,11,0.05);border-radius:16px;padding:24px;text-align:center;border:2px solid rgba(245,158,11,0.2);">
+            <div style="font-size:36px;margin-bottom:8px;">⭐</div><h3 style="color:var(--text-primary);">Premium</h3>
+            <p style="color:var(--text-muted);font-size:14px;">Unlimited projects • Advanced analytics • Export</p>
+            <p style="color:#f59e0b;font-weight:700;font-size:20px;margin-top:8px;">R30/month</p>
+        </div>
     </div>
     <div style="text-align:center;padding:40px 20px;background:var(--bg-secondary);border-radius:24px;border:1px solid var(--border-color);margin-bottom:40px;">
-        <h2 style="font-size:28px;font-weight:700;margin-bottom:12px;color:var(--text-primary);">Start for Free. Upgrade Anytime.</h2>
-        <p style="color:var(--text-secondary);font-size:16px;max-width:500px;margin:0 auto 20px auto;">R30/month for Premium. Unlimited projects, advanced analytics, and priority support.</p>
-        <a href="/signup" class="btn">Sign Up</a>
+        <h2 style="font-size:28px;font-weight:700;margin-bottom:12px;color:var(--text-primary);">Ready to take control?</h2>
+        <p style="color:var(--text-secondary);font-size:16px;max-width:500px;margin:0 auto 20px auto;">Join hundreds of users tracking their tech empire.</p>
+        <a href="/signup" class="btn">Get Started Free</a>
     </div>
     <div style="text-align:center;border-top:1px solid var(--border-color);padding-top:30px;">
         <a href="/privacy" style="color:var(--text-muted);text-decoration:none;margin:0 12px;">Privacy</a>
@@ -1641,8 +1653,9 @@ def index():
         <p style="color:var(--text-muted);margin-top:12px;">&copy; 2026 Summit</p>
     </div>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
+# ----- PRIVACY, TERMS, CONTACT -----
 @app.route('/privacy')
 def privacy():
     lang = 'en'
@@ -1656,21 +1669,21 @@ def privacy():
     <h2 style="font-size:28px;font-weight:700;margin-bottom:20px;">{t('privacy_policy', lang)}</h2>
     <div class="card">
         <h3>1. Information We Collect</h3>
-        <p style="color:var(--text-secondary);">We collect your email address, full name, and any data you enter (projects, income, crypto, stocks). This data is stored securely and used only to provide the Summit service.</p>
+        <p style="color:var(--text-secondary);">We collect your email address, full name, and any data you enter.</p>
         <h3>2. How We Use Your Data</h3>
-        <p style="color:var(--text-secondary);">Your data is used to display your portfolio, track your investments, and improve your experience. We do not sell your data to third parties.</p>
+        <p style="color:var(--text-secondary);">Your data is used to display your portfolio. We do not sell your data.</p>
         <h3>3. Data Security</h3>
-        <p style="color:var(--text-secondary);">We use industry-standard encryption and hashing to protect your password and personal information.</p>
+        <p style="color:var(--text-secondary);">We use industry-standard encryption.</p>
         <h3>4. Third-Party Services</h3>
-        <p style="color:var(--text-secondary);">Summit uses Yahoo Finance for stock data and Etherscan for blockchain verification. These services have their own privacy policies.</p>
+        <p style="color:var(--text-secondary);">Summit uses Yahoo Finance and Etherscan.</p>
         <h3>5. Cookies</h3>
-        <p style="color:var(--text-secondary);">We use session cookies to keep you logged in. No tracking cookies are used.</p>
+        <p style="color:var(--text-secondary);">We use session cookies only.</p>
         <h3>6. Contact</h3>
-        <p style="color:var(--text-secondary);">If you have any questions, <a href="/contact" style="color:#60a5fa;">contact us</a>.</p>
+        <p style="color:var(--text-secondary);">Questions? <a href="/contact" style="color:#60a5fa;">Contact us</a>.</p>
     </div>
     <a href="/dashboard" class="btn btn-ghost mt-10">{t('back', lang)}</a>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
 @app.route('/terms')
 def terms():
@@ -1687,21 +1700,21 @@ def terms():
         <h3>1. Acceptance of Terms</h3>
         <p style="color:var(--text-secondary);">By using Summit, you agree to these Terms of Service.</p>
         <h3>2. User Accounts</h3>
-        <p style="color:var(--text-secondary);">You are responsible for your account security. Do not share your password.</p>
+        <p style="color:var(--text-secondary);">You are responsible for your account security.</p>
         <h3>3. User Data</h3>
-        <p style="color:var(--text-secondary);">You own your data. You can export or delete it at any time.</p>
+        <p style="color:var(--text-secondary);">You own your data. You can delete it at any time.</p>
         <h3>4. Acceptable Use</h3>
-        <p style="color:var(--text-secondary);">Do not use Summit for illegal activities. Do not abuse the platform.</p>
+        <p style="color:var(--text-secondary);">Do not use Summit for illegal activities.</p>
         <h3>5. Disclaimer</h3>
-        <p style="color:var(--text-secondary);">Summit provides tracking and information tools. We do not provide financial advice. Always do your own research.</p>
+        <p style="color:var(--text-secondary);">We do not provide financial advice.</p>
         <h3>6. Changes to Terms</h3>
-        <p style="color:var(--text-secondary);">We may update these terms. Continued use means acceptance of the new terms.</p>
+        <p style="color:var(--text-secondary);">We may update these terms.</p>
         <h3>7. Contact</h3>
         <p style="color:var(--text-secondary);">Questions? <a href="/contact" style="color:#60a5fa;">Contact us</a>.</p>
     </div>
     <a href="/dashboard" class="btn btn-ghost mt-10">{t('back', lang)}</a>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
 @app.route('/contact')
 def contact():
@@ -1715,7 +1728,7 @@ def contact():
     page = f"""
     <h2 style="font-size:28px;font-weight:700;margin-bottom:20px;">{t('contact_us', lang)}</h2>
     <div class="card">
-        <p style="color:var(--text-secondary);font-size:16px;">📧 <strong>Email:</strong> support@summit.app</p>
+        <p style="color:var(--text-secondary);font-size:16px;">📧 <strong>Email:</strong> hlatshwayoawande@gmail.com</p>
         <p style="color:var(--text-secondary);font-size:16px;">🌐 <strong>Website:</strong> summit.onrender.com</p>
         <p style="color:var(--text-secondary);font-size:16px;">📍 <strong>{t('address', lang)}:</strong> South Africa</p>
         <hr style="border-color:var(--border-color);margin:20px 0;">
@@ -1723,14 +1736,93 @@ def contact():
     </div>
     <a href="/dashboard" class="btn btn-ghost mt-10">{t('back', lang)}</a>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
-# ---------- AUTH ----------
+# ----- FORGOT PASSWORD -----
+@app.route('/forgot-password', methods=['GET', 'POST'])
+def forgot_password():
+    if request.method == 'POST':
+        email = request.form.get('email')
+        user = User.query.filter_by(email=email).first()
+        if user:
+            token = secrets.token_urlsafe(32)
+            reset = PasswordReset(user_id=user.id, token=token)
+            db.session.add(reset)
+            db.session.commit()
+            flash(f'Password reset link sent to {email}. Check your console for the link.', 'info')
+            print(f"Reset link: {url_for('reset_password', token=token, _external=True)}")
+        else:
+            flash('No account found with that email.', 'danger')
+        return redirect(url_for('login'))
+    page = """
+    <div style="max-width:420px;margin:0 auto;">
+        <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);text-align:center;margin-bottom:20px;">Reset Password</h2>
+        <div class="card">
+            <form method="POST">
+                <input type="email" name="email" placeholder="Your email" required>
+                <button type="submit" class="btn" style="width:100%;">Send Reset Link</button>
+            </form>
+            <a href="/login" class="btn btn-ghost mt-10" style="display:block;text-align:center;">Back to Login</a>
+        </div>
+    </div>
+    """
+    return render_template_string(BASE_HTML, content=page)
+
+@app.route('/reset-password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    reset = PasswordReset.query.filter_by(token=token, used=False).first()
+    if not reset:
+        flash('Invalid or expired reset link.', 'danger')
+        return redirect(url_for('login'))
+    if request.method == 'POST':
+        password = request.form.get('password')
+        confirm = request.form.get('confirm_password')
+        if password != confirm:
+            flash('Passwords do not match.', 'danger')
+            return redirect(url_for('reset_password', token=token))
+        if len(password) < 6:
+            flash('Password must be at least 6 characters.', 'danger')
+            return redirect(url_for('reset_password', token=token))
+        user = User.query.get(reset.user_id)
+        user.password = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        reset.used = True
+        db.session.commit()
+        flash('Password reset successfully! Please login.', 'success')
+        return redirect(url_for('login'))
+    page = f"""
+    <div style="max-width:420px;margin:0 auto;">
+        <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);text-align:center;margin-bottom:20px;">Reset Password</h2>
+        <div class="card">
+            <form method="POST">
+                <input type="password" name="password" placeholder="New password (min 6 chars)" required>
+                <input type="password" name="confirm_password" placeholder="Confirm password" required>
+                <button type="submit" class="btn" style="width:100%;">Reset Password</button>
+            </form>
+        </div>
+    </div>
+    """
+    return render_template_string(BASE_HTML, content=page)
+
+# ----- THEME UPDATE -----
+@app.route('/update-theme', methods=['POST'])
+def update_theme():
+    if 'user_id' not in session:
+        return jsonify({'status': 'error'}), 401
+    user = User.query.get(session['user_id'])
+    if not user:
+        return jsonify({'status': 'error'}), 401
+    theme = request.form.get('theme', 'dark')
+    pref = UserPreference.query.filter_by(user_id=user.id).first()
+    if pref:
+        pref.theme = theme
+        db.session.commit()
+    return jsonify({'status': 'success'})
+
+# ----- AUTH -----
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if 'user_id' in session:
         return redirect(url_for('dashboard'))
-    lang = 'en'
     if request.method == 'POST':
         full_name = request.form.get('full_name')
         email = request.form.get('email')
@@ -1752,12 +1844,7 @@ def signup():
                 flash(e, 'danger')
             return redirect(url_for('signup'))
         hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        new_user = User(
-            full_name=full_name,
-            email=email,
-            password=hashed,
-            referral_code=generate_referral_code()
-        )
+        new_user = User(full_name=full_name, email=email, password=hashed, referral_code=generate_referral_code())
         ref_code = request.args.get('ref')
         if ref_code:
             referrer = User.query.filter_by(referral_code=ref_code).first()
@@ -1766,7 +1853,7 @@ def signup():
                 referrer.referral_count = User.query.filter_by(referred_by_id=referrer.id).count() + 1
         db.session.add(new_user)
         db.session.commit()
-        pref = UserPreference(user_id=new_user.id, currency='ZAR', language='en')
+        pref = UserPreference(user_id=new_user.id, currency='ZAR', language='en', theme='dark')
         db.session.add(pref)
         db.session.commit()
         flash('Account created! Please login.', 'success')
@@ -1787,13 +1874,12 @@ def signup():
         </div>
     </div>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if 'user_id' in session:
         return redirect(url_for('dashboard'))
-    lang = 'en'
     if request.method == 'POST':
         email = request.form.get('email')
         password = request.form.get('password')
@@ -1825,10 +1911,11 @@ def login():
                 <button type="submit" class="btn" style="width:100%;">Login</button>
             </form>
             <p class="text-muted text-center mt-10" style="font-size:14px;">Don't have an account? <a href="{signup_url}" style="color:#60a5fa;text-decoration:none;">Sign Up</a></p>
+            <p class="text-muted text-center mt-10" style="font-size:14px;"><a href="/forgot-password" style="color:#60a5fa;text-decoration:none;">Forgot Password?</a></p>
         </div>
     </div>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
 @app.route('/login/2fa', methods=['GET', 'POST'])
 def login_2fa():
@@ -1866,7 +1953,7 @@ def login_2fa():
         </div>
     </div>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
 @app.route('/logout')
 def logout():
@@ -1876,7 +1963,7 @@ def logout():
     flash('Logged out', 'info')
     return redirect(url_for('index'))
 
-# ---------- ADMIN DASHBOARD ----------
+# ----- ADMIN -----
 @app.route('/admin')
 def admin():
     if 'user_id' not in session:
@@ -1912,12 +1999,10 @@ def admin():
             <div style="max-height:400px;overflow-y:auto;">
                 <table style="width:100%;border-collapse:collapse;">
                     <thead>
-                        <tr>
-                            <th style="text-align:left;padding:8px;color:var(--text-muted);font-size:11px;text-transform:uppercase;">Name</th>
-                            <th style="text-align:left;padding:8px;color:var(--text-muted);font-size:11px;text-transform:uppercase;">Email</th>
-                            <th style="text-align:left;padding:8px;color:var(--text-muted);font-size:11px;text-transform:uppercase;">Plan</th>
-                            <th style="text-align:left;padding:8px;color:var(--text-muted);font-size:11px;text-transform:uppercase;">Action</th>
-                        </tr>
+                        <tr><th style="text-align:left;padding:8px;color:var(--text-muted);font-size:11px;">Name</th>
+                        <th style="text-align:left;padding:8px;color:var(--text-muted);font-size:11px;">Email</th>
+                        <th style="text-align:left;padding:8px;color:var(--text-muted);font-size:11px;">Plan</th>
+                        <th style="text-align:left;padding:8px;color:var(--text-muted);font-size:11px;">Action</th></tr>
                     </thead>
                     <tbody>
     """
@@ -1926,9 +2011,9 @@ def admin():
         action_button = ''
         if not u.is_owner:
             if u.is_premium:
-                action_button = f'<span style="color:#22c55e;font-size:12px;">✅ Premium</span>'
+                action_button = '<span style="color:#22c55e;font-size:12px;">✅ Premium</span>'
             else:
-                action_button = f'<a href="/admin/upgrade/{u.id}?password=summit2026" style="background:#f59e0b;color:white;padding:4px 12px;border-radius:8px;text-decoration:none;font-size:12px;">Upgrade</a>'
+                action_button = f'<a href="/admin/upgrade/{u.id}" style="background:#f59e0b;color:white;padding:4px 12px;border-radius:8px;text-decoration:none;font-size:12px;">Upgrade</a>'
         page += f"""
                         <tr>
                             <td style="padding:8px;border-bottom:1px solid var(--border-color);font-size:13px;color:var(--text-primary);">{u.full_name}</td>
@@ -1947,10 +2032,10 @@ def admin():
             <div style="max-height:400px;overflow-y:auto;">
     """
     for log in logs:
-        action_emoji = '🔓' if log.action == 'login' else '🚪' if log.action == 'logout' else '💎' if log.action == 'premium_purchase' else '📌'
+        emoji = '🔓' if log.action == 'login' else '🚪' if log.action == 'logout' else '💎' if log.action == 'premium_purchase' else '📌'
         page += f"""
                 <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-color);font-size:13px;">
-                    <span>{action_emoji} {log.user.full_name} - {log.action.replace('_', ' ').title()}</span>
+                    <span>{emoji} {log.user.full_name} - {log.action.replace('_', ' ').title()}</span>
                     <span style="color:var(--text-muted);font-size:11px;">{log.created_at.strftime('%b %d, %I:%M %p')}</span>
                 </div>
         """
@@ -1958,25 +2043,60 @@ def admin():
             </div>
         </div>
     </div>
-    <div style="margin-top:20px;display:flex;gap:12px;">
+    <div style="margin-top:20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
         <a href="/dashboard" class="btn btn-ghost">← Back to Dashboard</a>
-        <a href="/admin/reset-db?password=SummitReset2026" class="btn" style="background:#ef4444;color:white;padding:10px 20px;border-radius:12px;text-decoration:none;">🗑️ Reset Database</a>
+        <form method="POST" action="/admin/reset-db" style="display:flex;gap:8px;align-items:center;margin:0;" onsubmit="return confirm('This will permanently delete ALL data. Are you absolutely sure?');">
+            <input type="text" name="confirm" placeholder="Type RESET to confirm" style="width:200px;padding:8px 12px;">
+            <button type="submit" class="btn" style="background:#ef4444;">🗑️ Reset Database</button>
+        </form>
     </div>
     """
-    return render_template_string(BASE_HTML, content=page, lang='en', t=t)
+    return render_template_string(BASE_HTML, content=page)
 
 @app.route('/admin/upgrade/<int:user_id>')
-@app.route('/admin/reset-db')
+def admin_upgrade(user_id):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    requester = User.query.get(session['user_id'])
+    if not requester or not requester.is_owner:
+        flash('Unauthorized access.', 'danger')
+        return redirect(url_for('dashboard'))
+    user = User.query.get(user_id)
+    if not user:
+        flash('User not found', 'danger')
+        return redirect(url_for('admin'))
+    if user.is_owner:
+        flash('Cannot upgrade owner.', 'warning')
+        return redirect(url_for('admin'))
+    if user.is_premium and user.premium_until and user.premium_until > datetime.utcnow():
+        flash(f'{user.full_name} already Premium until {user.premium_until.strftime("%Y-%m-%d")}', 'warning')
+        return redirect(url_for('admin'))
+    user.is_premium = True
+    user.premium_until = datetime.utcnow() + timedelta(days=30)
+    db.session.commit()
+    log_audit(user_id=user.id, action='premium_purchase', details=f'Admin upgraded {user.full_name} to Premium', ip_address=request.remote_addr)
+    flash(f'✅ Successfully upgraded {user.full_name} to Premium!', 'success')
+    return redirect(url_for('admin'))
+
+@app.route('/admin/reset-db', methods=['POST'])
 def reset_db():
-    password = request.args.get('password', '')
-    if password != 'SummitReset2026':
-        return "Unauthorized. Use ?password=SummitReset2026", 401
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    requester = User.query.get(session['user_id'])
+    if not requester or not requester.is_owner:
+        flash('Unauthorized access.', 'danger')
+        return redirect(url_for('dashboard'))
+    confirm = request.form.get('confirm', '')
+    if confirm != 'RESET':
+        flash('Type RESET to confirm database reset.', 'danger')
+        return redirect(url_for('admin'))
     db.drop_all()
     db.create_all()
     create_owner_account()
-    return "✅ Database reset successfully! Owner account recreated. <a href='/login'>Login</a>"
+    flash('✅ Database reset successfully! Owner account recreated.', 'success')
+    return redirect(url_for('login'))
 
-# ---------- DASHBOARD ----------
+# ----- DASHBOARD -----
 @app.route('/dashboard')
 def dashboard():
     if 'user_id' not in session:
@@ -1994,7 +2114,7 @@ def dashboard():
             flash(f"🔔 Price Alert: {msg}", 'success')
     pref = UserPreference.query.filter_by(user_id=user.id).first()
     if not pref:
-        pref = UserPreference(user_id=user.id, currency='ZAR', language='en')
+        pref = UserPreference(user_id=user.id, currency='ZAR', language='en', theme='dark')
         db.session.add(pref)
         db.session.commit()
     currency = pref.currency
@@ -2050,13 +2170,13 @@ def dashboard():
             </li>
             """
     else:
-        recent_projects = f'<p class="text-muted text-sm">No projects yet. <a href="/projects" style="color:#60a5fa;text-decoration:none;">Add Project</a></p>'
+        recent_projects = '<p class="text-muted text-sm">No projects yet. <a href="/projects" style="color:#60a5fa;text-decoration:none;">Add Project</a></p>'
     recent_incomes = ""
     if incomes:
         for i in incomes[:5]:
             recent_incomes += f'<li style="padding:10px 0;border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;"><span>{i.source}</span><span style="color:#22c55e;">+{currency_symbol}{convert_currency(i.amount, currency):.2f}</span></li>'
     else:
-        recent_incomes = f'<p class="text-muted text-sm">No income yet. <a href="/income" style="color:#60a5fa;text-decoration:none;">Add Income</a></p>'
+        recent_incomes = '<p class="text-muted text-sm">No income yet. <a href="/income" style="color:#60a5fa;text-decoration:none;">Add Income</a></p>'
     plan_badge = '<span class="badge badge-premium">Premium</span>' if is_premium else '<span class="badge badge-free">Free</span>'
     premium_note = f'<p class="text-muted text-xs">{days_left} days remaining</p>' if is_premium and days_left > 0 else ''
     owner_badge = '<span class="owner-badge">👑 Owner</span>' if is_owner else ''
@@ -2093,26 +2213,11 @@ def dashboard():
         <div class="card" style="display: flex; flex-direction: column; justify-content: center;">
             <h3>Snapshot</h3>
             <div style="display: flex; flex-direction: column; gap: 12px;">
-                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
-                    <span>💰 Income</span>
-                    <span style="color: #22c55e; font-weight: 600;">{currency_symbol}{total_income:.2f}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
-                    <span>📉 Expenses</span>
-                    <span style="color: #ef4444; font-weight: 600;">{currency_symbol}{total_expenses:.2f}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
-                    <span>₿ Crypto</span>
-                    <span style="color: #60a5fa; font-weight: 600;">{currency_symbol}{total_crypto:.2f}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
-                    <span>📈 Stocks</span>
-                    <span style="color: #8b5cf6; font-weight: 600;">{currency_symbol}{total_stock_value:.2f}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding-top: 8px; border-top: 1px solid var(--border-color);">
-                    <span style="font-weight: 700;">Net Worth</span>
-                    <span style="color: {'#22c55e' if net_worth >= 0 else '#ef4444'}; font-weight: 700;">{currency_symbol}{net_worth:.2f}</span>
-                </div>
+                <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border-color);padding-bottom:8px;"><span>💰 Income</span><span style="color:#22c55e;font-weight:600;">{currency_symbol}{total_income:.2f}</span></div>
+                <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border-color);padding-bottom:8px;"><span>📉 Expenses</span><span style="color:#ef4444;font-weight:600;">{currency_symbol}{total_expenses:.2f}</span></div>
+                <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border-color);padding-bottom:8px;"><span>₿ Crypto</span><span style="color:#60a5fa;font-weight:600;">{currency_symbol}{total_crypto:.2f}</span></div>
+                <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border-color);padding-bottom:8px;"><span>📈 Stocks</span><span style="color:#8b5cf6;font-weight:600;">{currency_symbol}{total_stock_value:.2f}</span></div>
+                <div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border-color);"><span style="font-weight:700;">Net Worth</span><span style="color:{'#22c55e' if net_worth >= 0 else '#ef4444'};font-weight:700;">{currency_symbol}{net_worth:.2f}</span></div>
             </div>
         </div>
     </div>
@@ -2133,27 +2238,11 @@ def dashboard():
             var data = {pie_values};
             var labels = {pie_labels};
             var colors = {pie_colors};
-            if (data.reduce((a, b) => a + b, 0) > 0) {{
+            if (data.reduce((a,b)=>a+b,0) > 0) {{
                 new Chart(ctx, {{
                     type: 'pie',
-                    data: {{
-                        labels: labels,
-                        datasets: [{{
-                            data: data,
-                            backgroundColor: colors,
-                            borderColor: '#0a0e1a',
-                            borderWidth: 3
-                        }}]
-                    }},
-                    options: {{
-                        responsive: true,
-                        maintainAspectRatio: true,
-                        plugins: {{
-                            legend: {{
-                                labels: {{ color: '#e8edf5', font: {{ size: 12 }} }}
-                            }}
-                        }}
-                    }}
+                    data: {{ labels: labels, datasets: [{{ data: data, backgroundColor: colors, borderColor: '#0a0e1a', borderWidth: 3 }}] }},
+                    options: {{ responsive: true, maintainAspectRatio: true, plugins: {{ legend: {{ labels: {{ color: '#e8edf5', font: {{ size: 12 }} }} }} }} }}
                 }});
             }} else {{
                 ctx.style.display = 'none';
@@ -2162,11 +2251,235 @@ def dashboard():
         }});
     </script>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
-# ---------- ALL OTHER ROUTES (Projects, Income, Crypto, Stocks, Market, etc.) ----------
-# These are exactly as you have them – I'm including them in full.
+def call_claude_for_finance(question, income, expenses, crypto, stocks, liabilities, net_worth, symbol, currency):
+    """
+    Calls the real Anthropic API (Claude) for a genuinely intelligent, freeform answer,
+    grounded in the user's actual financial data. Returns None on any failure so the
+    caller can fall back to the rule-based assistant instead of showing an error.
+    """
+    if not ANTHROPIC_API_KEY:
+        return None
 
+    def c(amount):
+        return f"{symbol}{convert_currency(amount, currency):.2f}"
+
+    context = (
+        f"Income: {c(income)}. Expenses: {c(expenses)}. Crypto holdings: {c(crypto)}. "
+        f"Stock holdings: {c(stocks)}. Liabilities: {c(liabilities)}. Net worth: {c(net_worth)}."
+    )
+    system_prompt = (
+        "You are the AI Financial Assistant inside Summit, a personal finance app. "
+        "Answer the user's question using the financial snapshot provided below. "
+        "Be specific, concise (2-4 sentences unless more detail is truly needed), and actionable. "
+        "Refer to their actual numbers where relevant. You are not a licensed financial advisor, "
+        "so frame suggestions as general information rather than formal advice, but don't be overly "
+        "hedgy or repeat disclaimers more than once.\n\n"
+        f"User's financial snapshot: {context}"
+    )
+
+    try:
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-5",
+                "max_tokens": 400,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": question}],
+            },
+            timeout=20,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            parts = [block.get("text", "") for block in data.get("content", []) if block.get("type") == "text"]
+            text = "".join(parts).strip()
+            return text or None
+        return None
+    except Exception:
+        return None
+
+def generate_financial_insight(question, income, expenses, crypto, stocks, liabilities, net_worth, symbol, currency):
+    """
+    Lightweight, self-contained financial assistant.
+    Generates a grounded, personalized response from the user's own numbers,
+    with no external API dependency. Used as the default assistant, and as an
+    automatic fallback if the Claude API is unavailable or not configured.
+    """
+    def c(amount):
+        return f"{symbol}{convert_currency(amount, currency):.2f}"
+
+    q = question.lower()
+    savings_rate = ((income - expenses) / income * 100) if income > 0 else 0
+    investable = crypto + stocks
+    debt_ratio = (liabilities / net_worth * 100) if net_worth > 0 else None
+
+    if any(w in q for w in ['save', 'saving', 'budget']):
+        if income <= 0:
+            return "I don't see any income logged yet, so I can't calculate a savings rate. Add your income under the Income tab and I'll be able to give you a real number."
+        if savings_rate < 0:
+            return f"Right now you're spending more than you earn — expenses are {c(expenses)} against income of {c(income)}. The fastest fix is usually to sort expenses by category (check the Analytics page) and trim the top one or two categories first, rather than cutting everywhere at once."
+        elif savings_rate < 20:
+            return f"You're saving about {savings_rate:.0f}% of your income ({c(income - expenses)} of {c(income)}). A common target is 20%. Try automating a transfer to savings right after payday so the money moves before you get a chance to spend it."
+        else:
+            return f"You're saving a healthy {savings_rate:.0f}% of your income — that's {c(income - expenses)} out of {c(income)}. At this rate, consider whether some of that could be working harder for you in your Stocks or Crypto portfolio instead of sitting idle."
+
+    if any(w in q for w in ['invest', 'portfolio', 'balanced', 'diversif']):
+        if investable <= 0:
+            return "You don't have any stocks or crypto logged yet. Once you add holdings, I can tell you how concentrated your portfolio is. As a rule of thumb, most people are better off with a diversified core (index funds/ETFs) plus a smaller allocation to higher-risk assets like individual stocks or crypto."
+        crypto_pct = (crypto / investable * 100) if investable > 0 else 0
+        stock_pct = 100 - crypto_pct
+        verdict = "quite crypto-heavy" if crypto_pct > 60 else "quite stock-heavy" if stock_pct > 85 else "reasonably balanced"
+        return f"Your tracked investments are {c(investable)} total: {crypto_pct:.0f}% crypto ({c(crypto)}) and {stock_pct:.0f}% stocks ({c(stocks)}). That looks {verdict}. Crypto is far more volatile than equities, so many investors cap it at 5-15% of their investable assets unless they have a high risk tolerance."
+
+    if any(w in q for w in ['debt', 'liabilit', 'owe', 'loan']):
+        if liabilities <= 0:
+            return "You have no liabilities logged — you're debt-free according to Summit. Keep it that way by paying off any new credit in full each month where possible."
+        if debt_ratio is not None:
+            return f"You're carrying {c(liabilities)} in liabilities against a net worth of {c(net_worth)} ({debt_ratio:.0f}% of net worth). If any of this is high-interest debt (credit cards, store cards), paying that down usually beats most investment returns you'd get elsewhere."
+        return f"You're carrying {c(liabilities)} in liabilities. Prioritize paying off the highest-interest debt first (the 'avalanche' method) to minimize what you pay in interest overall."
+
+    if any(w in q for w in ['net worth', 'worth', 'how am i doing', 'overview', 'summary']):
+        trend = "positive" if net_worth >= 0 else "negative"
+        return f"Your current net worth is {c(net_worth)} ({trend}). That's built from income of {c(income)}, crypto of {c(crypto)}, and stocks of {c(stocks)}, minus liabilities of {c(liabilities)} and expenses of {c(expenses)} tracked so far. Check the Analytics page for the trend over time."
+
+    if any(w in q for w in ['expense', 'spend', 'spending', 'cut', 'reduce']):
+        if expenses <= 0:
+            return "No expenses logged yet — add some under the Expenses tab so I can help you spot where your money is going."
+        return f"You've logged {c(expenses)} in expenses so far. Head to Analytics to see the category breakdown — cutting your single largest category by even 10-15% usually has more impact than spreading small cuts across everything."
+
+    if any(w in q for w in ['next', 'should i', 'recommend', 'advice', 'tip']):
+        tips = []
+        if income > 0 and savings_rate < 15:
+            tips.append("boosting your savings rate, which is currently under 15%")
+        if liabilities > 0:
+            tips.append("paying down existing liabilities before taking on new investments")
+        if investable > 0 and crypto > stocks * 1.5:
+            tips.append("balancing your portfolio, since it currently leans heavily toward crypto")
+        if not tips:
+            tips.append("keeping up the consistent tracking you're already doing, and revisiting your budget monthly")
+        return "Based on what's logged in Summit, I'd focus on: " + "; ".join(tips) + "."
+
+    return (f"Here's a quick snapshot: net worth {c(net_worth)}, income {c(income)}, expenses {c(expenses)}, "
+            f"investments {c(investable)}, liabilities {c(liabilities)}. Ask me about saving, investing, debt, "
+            f"or spending and I'll dig into the specific numbers behind that.")
+
+# ============ AI ASSISTANT ============
+@app.route('/ai-assistant', methods=['GET', 'POST'])
+def ai_assistant():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    user = User.query.get(session['user_id'])
+    if not user:
+        session.clear()
+        flash('Session expired. Please login again.', 'warning')
+        return redirect(url_for('login'))
+    
+    pref = UserPreference.query.filter_by(user_id=user.id).first()
+    lang = pref.language if pref else 'en'
+    currency = pref.currency if pref else 'ZAR'
+    currency_symbol = get_currency_symbol(currency)
+    
+    # Gather user data for context
+    total_income = sum(i.amount for i in Income.query.filter_by(user_id=user.id).all())
+    total_expenses = sum(e.amount for e in Expense.query.filter_by(user_id=user.id).all())
+    total_crypto = sum(c.value_zar for c in Crypto.query.filter_by(user_id=user.id).all())
+    total_stocks = 0
+    for s in Stock.query.filter_by(user_id=user.id).all():
+        price = get_stock_price(s.symbol)
+        if price:
+            total_stocks += price * s.shares
+    total_liabilities = sum(l.amount for l in Liability.query.filter_by(user_id=user.id).all())
+    net_worth = total_income + total_crypto + total_stocks - total_liabilities
+    
+    # Convert to user's currency for display
+    total_income_c = convert_currency(total_income, currency)
+    total_expenses_c = convert_currency(total_expenses, currency)
+    total_crypto_c = convert_currency(total_crypto, currency)
+    total_stocks_c = convert_currency(total_stocks, currency)
+    total_liabilities_c = convert_currency(total_liabilities, currency)
+    net_worth_c = convert_currency(net_worth, currency)
+    
+    ai_response = None
+    user_question = None
+    
+    if request.method == 'POST':
+        user_question = request.form.get('question', '').strip()
+        
+        if user_question:
+            try:
+                ai_response = call_claude_for_finance(
+                    user_question, total_income, total_expenses, total_crypto,
+                    total_stocks, total_liabilities, net_worth,
+                    currency_symbol, currency
+                )
+                if not ai_response:
+                    ai_response = generate_financial_insight(
+                        user_question, total_income, total_expenses, total_crypto,
+                        total_stocks, total_liabilities, net_worth,
+                        currency_symbol, currency
+                    )
+            except Exception as e:
+                flash(f'AI Error: {str(e)}', 'danger')
+                return redirect(url_for('ai_assistant'))
+    
+    # Build the page
+    page = f"""
+    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">🤖 AI Financial Assistant</h2>
+    
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;">
+        <div class="card">
+            <h3>Your Financial Snapshot</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div><p style="color:var(--text-muted);font-size:12px;">Income</p><p style="font-size:20px;font-weight:700;color:#22c55e;">{currency_symbol}{total_income_c:.2f}</p></div>
+                <div><p style="color:var(--text-muted);font-size:12px;">Expenses</p><p style="font-size:20px;font-weight:700;color:#ef4444;">{currency_symbol}{total_expenses_c:.2f}</p></div>
+                <div><p style="color:var(--text-muted);font-size:12px;">Crypto</p><p style="font-size:20px;font-weight:700;color:#60a5fa;">{currency_symbol}{total_crypto_c:.2f}</p></div>
+                <div><p style="color:var(--text-muted);font-size:12px;">Stocks</p><p style="font-size:20px;font-weight:700;color:#8b5cf6;">{currency_symbol}{total_stocks_c:.2f}</p></div>
+                <div style="grid-column:span 2;"><p style="color:var(--text-muted);font-size:12px;">Net Worth</p><p style="font-size:24px;font-weight:700;color:{'#22c55e' if net_worth_c >= 0 else '#ef4444'};">{currency_symbol}{net_worth_c:.2f}</p></div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h3>Ask Me Anything</h3>
+            <p style="color:var(--text-muted);font-size:14px;margin-bottom:12px;">Ask about your finances, get tips, or plan your next move.</p>
+            {'' if ANTHROPIC_API_KEY else '<p style="color:var(--text-muted);font-size:12px;margin-bottom:12px;">💡 Running on the built-in assistant. Set an <code>ANTHROPIC_API_KEY</code> in your .env for richer, freeform answers.</p>'}
+            <form method="POST">
+                <div style="display:flex;gap:8px;">
+                    <input type="text" name="question" placeholder="e.g., How can I save more money?" style="flex:1;" required>
+                    <button type="submit" class="btn">Ask</button>
+                </div>
+            </form>
+            {f'''
+            <div style="margin-top:12px;padding:12px;background:var(--bg-secondary);border-radius:12px;border-left:4px solid #3b82f6;">
+                <p style="color:var(--text-secondary);font-size:14px;"><strong>You:</strong> {user_question}</p>
+                <p style="color:var(--text-primary);font-size:14px;margin-top:8px;"><strong>🤖 Assistant:</strong> {ai_response}</p>
+            </div>
+            ''' if ai_response else ''}
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>💡 Quick Questions to Ask</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button onclick="document.querySelector('input[name=question]').value='How can I save more money?';" class="btn btn-ghost" style="font-size:12px;">How to save more?</button>
+            <button onclick="document.querySelector('input[name=question]').value='Is my portfolio balanced?';" class="btn btn-ghost" style="font-size:12px;">Is my portfolio balanced?</button>
+            <button onclick="document.querySelector('input[name=question]').value='What should I invest in next?';" class="btn btn-ghost" style="font-size:12px;">What to invest in?</button>
+            <button onclick="document.querySelector('input[name=question]').value='How am I doing financially?';" class="btn btn-ghost" style="font-size:12px;">How am I doing?</button>
+            <button onclick="document.querySelector('input[name=question]').value='Should I buy more crypto or stocks?';" class="btn btn-ghost" style="font-size:12px;">Crypto vs Stocks?</button>
+        </div>
+    </div>
+    
+    <a href="/dashboard" class="btn btn-ghost mt-10">← Back to Dashboard</a>
+    """
+    return render_template_string(BASE_HTML, content=page)
+
+# ----- PROJECTS -----
 @app.route('/projects', methods=['GET', 'POST'])
 def projects():
     if 'user_id' not in session:
@@ -2186,6 +2499,7 @@ def projects():
         notes = request.form.get('notes', '')
         due_date = request.form.get('due_date')
         progress = request.form.get('progress', 0)
+        portfolio_id = request.form.get('portfolio_id')
         if name:
             due_date_obj = None
             if due_date:
@@ -2193,7 +2507,7 @@ def projects():
                     due_date_obj = datetime.strptime(due_date, '%Y-%m-%d').date()
                 except:
                     pass
-            new_project = Project(user_id=user.id, name=name, status=status, notes=notes, due_date=due_date_obj, progress=int(progress) if progress else 0)
+            new_project = Project(user_id=user.id, name=name, status=status, notes=notes, due_date=due_date_obj, progress=int(progress) if progress else 0, portfolio_id=portfolio_id if portfolio_id else None)
             db.session.add(new_project)
             db.session.commit()
             flash('Project added!', 'success')
@@ -2211,9 +2525,7 @@ def projects():
             milestone_html += f"""
             <li style="display:flex;align-items:center;gap:8px;padding:4px 0;">
                 <form method="POST" action="/milestone/toggle/{m.id}" style="display:inline;">
-                    <button type="submit" style="background:none;border:none;cursor:pointer;font-size:18px;">
-                        {'✅' if m.is_completed else '⬜'}
-                    </button>
+                    <button type="submit" style="background:none;border:none;cursor:pointer;font-size:18px;">{'✅' if m.is_completed else '⬜'}</button>
                 </form>
                 <span style="color:{'#22c55e' if m.is_completed else 'var(--text-secondary)'};">{m.name}</span>
             </li>
@@ -2236,6 +2548,11 @@ def projects():
         """
     upgrade_url = url_for('upgrade')
     can_add = is_premium or len(all_projects) < 2
+    portfolios = Portfolio.query.filter_by(user_id=user.id).all()
+    portfolio_options = '<select name="portfolio_id" style="margin-bottom:12px;"><option value="">No Portfolio</option>'
+    for p in portfolios:
+        portfolio_options += f'<option value="{p.id}">{p.name}</option>'
+    portfolio_options += '</select>'
     page = f"""
     <div class="flex"><h2 style="font-size:24px;font-weight:700;color:var(--text-primary);">{t("projects", lang)}</h2><span class="text-muted text-sm">{len(all_projects)} / {'Unlimited' if is_premium else '2'}</span></div>
     <div class="card"><h3>{t("add_project", lang)}</h3>
@@ -2246,6 +2563,7 @@ def projects():
         <input type="date" name="due_date" placeholder="{t("due_date", lang)}">
         <input type="number" name="progress" placeholder="{t("progress", lang)} (0-100%)" min="0" max="100">
         <textarea name="notes" placeholder="{t("notes", lang)}" rows="3"></textarea>
+        {portfolio_options}
         <button type="submit" class="btn">{t("add_project", lang)}</button>
     </form>
     ''' if can_add else f'<p class="text-muted text-sm">{t("free_limit", lang)} <a href="{upgrade_url}" style="color:#60a5fa;text-decoration:none;">{t("upgrade", lang)}</a></p>'}
@@ -2256,8 +2574,9 @@ def projects():
     ''' if all_projects else '<p class="text-muted text-sm">{t("no_projects", lang)}</p>'}
     <script>function filterProjects(){{var input=document.getElementById('searchInput');var filter=input.value.toLowerCase();var rows=document.querySelectorAll('#projectTable tbody tr');rows.forEach(function(row){{var text=row.textContent.toLowerCase();row.style.display=text.includes(filter)?'':'none';}});}}</script>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
+# ----- INCOME -----
 @app.route('/income', methods=['GET', 'POST'])
 def income():
     if 'user_id' not in session:
@@ -2277,10 +2596,11 @@ def income():
         notes = request.form.get('notes', '')
         is_recurring = request.form.get('is_recurring') == 'on'
         frequency = request.form.get('frequency', 'monthly')
+        portfolio_id = request.form.get('portfolio_id')
         if source and amount:
             try:
                 amount = float(amount)
-                new_income = Income(user_id=user.id, source=source, amount=amount, notes=notes, is_recurring=is_recurring, frequency=frequency)
+                new_income = Income(user_id=user.id, source=source, amount=amount, notes=notes, is_recurring=is_recurring, frequency=frequency, portfolio_id=portfolio_id if portfolio_id else None)
                 db.session.add(new_income)
                 db.session.commit()
                 flash('Income added!', 'success')
@@ -2292,6 +2612,11 @@ def income():
     all_incomes = Income.query.filter_by(user_id=user.id).order_by(Income.date.desc()).all()
     total_zar = sum(i.amount for i in all_incomes)
     total = convert_currency(total_zar, currency)
+    portfolios = Portfolio.query.filter_by(user_id=user.id).all()
+    portfolio_options = '<select name="portfolio_id"><option value="">None</option>'
+    for p in portfolios:
+        portfolio_options += f'<option value="{p.id}">{p.name}</option>'
+    portfolio_options += '</select>'
     table_rows = ""
     for i in all_incomes:
         recurring_badge = '🔄' if i.is_recurring else ''
@@ -2305,22 +2630,19 @@ def income():
         <input type="number" step="0.01" name="amount" placeholder="{t("amount", lang)}" required>
         <textarea name="notes" placeholder="{t("notes", lang)}" rows="2"></textarea>
         <div style="display:flex;gap:12px;align-items:center;margin:8px 0;">
-            <label style="color:var(--text-secondary);font-size:14px;">
-                <input type="checkbox" name="is_recurring"> 🔄 Recurring
-            </label>
-            <select name="frequency">
-                <option value="monthly">Monthly</option>
-                <option value="yearly">Yearly</option>
-            </select>
+            <label style="color:var(--text-secondary);font-size:14px;"><input type="checkbox" name="is_recurring"> 🔄 Recurring</label>
+            <select name="frequency"><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
         </div>
+        {portfolio_options}
         <button type="submit" class="btn">{t("add_income", lang)}</button>
     </form></div>
     {f'''
     <div class="card"><table><thead><tr><th>{t("source", lang)}</th><th>{t("amount", lang)}</th><th>{t("date", lang)}</th><th>{t("notes", lang)}</th><th>Recurring</th></tr></thead><tbody>{table_rows}</tbody></table></div>
     ''' if all_incomes else '<p class="text-muted text-sm">{t("no_income", lang)}</p>'}
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
+# ----- CRYPTO -----
 @app.route('/crypto', methods=['GET', 'POST'])
 def crypto():
     if 'user_id' not in session:
@@ -2338,11 +2660,12 @@ def crypto():
         coin_name = request.form.get('coin_name')
         amount = request.form.get('amount')
         value_zar = request.form.get('value_zar')
+        portfolio_id = request.form.get('portfolio_id')
         if coin_name and amount and value_zar:
             try:
                 amount = float(amount)
                 value_zar = float(value_zar)
-                new_crypto = Crypto(user_id=user.id, coin_name=coin_name, amount=amount, value_zar=value_zar)
+                new_crypto = Crypto(user_id=user.id, coin_name=coin_name, amount=amount, value_zar=value_zar, portfolio_id=portfolio_id if portfolio_id else None)
                 db.session.add(new_crypto)
                 db.session.commit()
                 flash('Crypto added!', 'success')
@@ -2354,19 +2677,31 @@ def crypto():
     all_cryptos = Crypto.query.filter_by(user_id=user.id).all()
     total_zar = sum(c.value_zar for c in all_cryptos)
     total = convert_currency(total_zar, currency)
+    portfolios = Portfolio.query.filter_by(user_id=user.id).all()
+    portfolio_options = '<select name="portfolio_id"><option value="">None</option>'
+    for p in portfolios:
+        portfolio_options += f'<option value="{p.id}">{p.name}</option>'
+    portfolio_options += '</select>'
     table_rows = ""
     for c in all_cryptos:
         c_value = convert_currency(c.value_zar, currency)
         table_rows += f'<tr><td><strong>{c.coin_name}</strong></td><td>{c.amount}</td><td style="color:#60a5fa;">{currency_symbol}{c_value:.2f}</td></tr>'
     page = f"""
     <div class="flex"><h2 style="font-size:24px;font-weight:700;color:var(--text-primary);">{t("crypto", lang)}</h2><span class="text-muted text-sm">{t("total", lang)}: <strong style="color:#60a5fa;">{currency_symbol}{total:.2f}</strong></span></div>
-    <div class="card"><h3>{t("add_crypto", lang)}</h3><form method="POST"><input type="text" name="coin_name" placeholder="{t("coin", lang)}" required><input type="number" step="0.000001" name="amount" placeholder="{t("amount", lang)}" required><input type="number" step="0.01" name="value_zar" placeholder="{t("value", lang)} (ZAR)" required><button type="submit" class="btn">{t("add_crypto", lang)}</button></form></div>
+    <div class="card"><h3>{t("add_crypto", lang)}</h3><form method="POST">
+        <input type="text" name="coin_name" placeholder="{t("coin", lang)}" required>
+        <input type="number" step="0.000001" name="amount" placeholder="{t("amount", lang)}" required>
+        <input type="number" step="0.01" name="value_zar" placeholder="{t("value", lang)} (ZAR)" required>
+        {portfolio_options}
+        <button type="submit" class="btn">{t("add_crypto", lang)}</button>
+    </form></div>
     {f'''
     <div class="card"><table><thead><tr><th>{t("coin", lang)}</th><th>{t("amount", lang)}</th><th>{t("value", lang)}</th></tr></thead><tbody>{table_rows}</tbody></table></div>
     ''' if all_cryptos else '<p class="text-muted text-sm">{t("no_crypto", lang)}</p>'}
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
+# ----- STOCKS -----
 @app.route('/stocks', methods=['GET', 'POST'])
 def stocks():
     if 'user_id' not in session:
@@ -2385,6 +2720,7 @@ def stocks():
         shares = request.form.get('shares')
         purchase_price = request.form.get('purchase_price')
         dividend_yield = request.form.get('dividend_yield')
+        portfolio_id = request.form.get('portfolio_id')
         if not symbol or not shares:
             flash('Symbol and shares are required', 'danger')
             return redirect(url_for('stocks'))
@@ -2398,7 +2734,7 @@ def stocks():
         if not get_stock_info(symbol):
             flash(f'Could not find stock symbol: {symbol}', 'danger')
             return redirect(url_for('stocks'))
-        new_stock = Stock(user_id=user.id, symbol=symbol, shares=shares, purchase_price=purchase_price, notes=request.form.get('notes', ''), dividend_yield=dividend_yield)
+        new_stock = Stock(user_id=user.id, symbol=symbol, shares=shares, purchase_price=purchase_price, notes=request.form.get('notes', ''), dividend_yield=dividend_yield, portfolio_id=portfolio_id if portfolio_id else None)
         db.session.add(new_stock)
         db.session.commit()
         flash(f'Added {symbol} to your portfolio!', 'success')
@@ -2440,25 +2776,26 @@ def stocks():
         total_gain = total_value - total_cost if total_cost > 0 else 0
         total_gain_display = f"+{currency_symbol}{total_gain:.2f}" if total_gain > 0 else f"-{currency_symbol}{abs(total_gain):.2f}" if total_gain < 0 else f"{currency_symbol}0.00"
         total_gain_color = "#22c55e" if total_gain > 0 else "#ef4444" if total_gain < 0 else "var(--text-muted)"
+        portfolios = Portfolio.query.filter_by(user_id=user.id).all()
+        portfolio_options = '<select name="portfolio_id"><option value="">None</option>'
+        for p in portfolios:
+            portfolio_options += f'<option value="{p.id}">{p.name}</option>'
+        portfolio_options += '</select>'
         page = f"""
-        <div class="flex" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
-            <h2 style="font-size:24px;font-weight:700;color:var(--text-primary);">{t("stocks", lang)}</h2>
-            <span class="text-muted" style="color:var(--text-muted);">{t("total", lang)}: <strong style="color:#60a5fa;">{currency_symbol}{total_value:.2f}</strong></span>
-        </div>
+        <div class="flex"><h2 style="font-size:24px;font-weight:700;color:var(--text-primary);">{t("stocks", lang)}</h2><span class="text-muted" style="color:var(--text-muted);">{t("total", lang)}: <strong style="color:#60a5fa;">{currency_symbol}{total_value:.2f}</strong></span></div>
         {f'<div class="card"><p style="color:#facc15;font-weight:600;">💰 Annual Dividend Income: {currency_symbol}{total_dividend:.2f}</p></div>' if total_dividend > 0 else ''}
-        <div class="card">
-            <h3>{t("add_stock", lang)}</h3>
-            <form method="POST">
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">
-                    <input type="text" name="symbol" placeholder="{t("symbol", lang)}" required>
-                    <input type="number" step="0.01" name="shares" placeholder="{t("shares", lang)}" required>
-                    <input type="number" step="0.01" name="purchase_price" placeholder="{t("purchase_price", lang)}">
-                    <input type="number" step="0.01" name="dividend_yield" placeholder="Dividend Yield %">
-                </div>
-                <textarea name="notes" placeholder="{t("notes", lang)}" rows="2"></textarea>
-                <button type="submit" class="btn">{t("add_stock", lang)}</button>
-            </form>
-        </div>
+        <div class="card"><h3>{t("add_stock", lang)}</h3>
+        <form method="POST">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">
+                <input type="text" name="symbol" placeholder="{t("symbol", lang)}" required>
+                <input type="number" step="0.01" name="shares" placeholder="{t("shares", lang)}" required>
+                <input type="number" step="0.01" name="purchase_price" placeholder="{t("purchase_price", lang)}">
+                <input type="number" step="0.01" name="dividend_yield" placeholder="Dividend Yield %">
+            </div>
+            <textarea name="notes" placeholder="{t("notes", lang)}" rows="2"></textarea>
+            {portfolio_options}
+            <button type="submit" class="btn">{t("add_stock", lang)}</button>
+        </form></div>
         {f'''
         <div class="card">
             <table>
@@ -2471,15 +2808,16 @@ def stocks():
         </div>
         ''' if all_stocks else '<p class="text-muted" style="color:var(--text-muted);">{t("no_stocks", lang)}</p>'}
         """
-        return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+        return render_template_string(BASE_HTML, content=page)
     except Exception as e:
         flash(f'Error loading stocks: {str(e)}', 'danger')
         page = f"""
         <h2 style="font-size:24px;font-weight:700;color:var(--text-primary);">{t("stocks", lang)}</h2>
         <div class="card"><p class="text-muted" style="color:var(--text-muted);">{t("error", lang)}</p></div>
         """
-        return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+        return render_template_string(BASE_HTML, content=page)
 
+# ----- MARKET -----
 @app.route('/market')
 def market():
     data = get_market_data()
@@ -2521,10 +2859,10 @@ def market():
         <a href="?filter=watchlist" class="btn btn-ghost" style="padding:6px 14px;font-size:12px;">⭐ {t('watchlist', lang)}</a>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px;">
-        <a href="/crypto" class="btn btn-ghost" style="text-align:center;">{t("crypto_prices", lang)}</a>
-        <a href="/forex" class="btn btn-ghost" style="text-align:center;">{t("forex_rates", lang)}</a>
-        <a href="/top-movers" class="btn btn-ghost" style="text-align:center;">{t("top_movers", lang)}</a>
-        <a href="/index-tracker" class="btn btn-ghost" style="text-align:center;">{t("index_tracker", lang)}</a>
+        <a href="/crypto_prices" class="btn btn-ghost" style="text-align:center;">{t("crypto_prices", lang)}</a>
+        <a href="/forex_rates" class="btn btn-ghost" style="text-align:center;">{t("forex_rates", lang)}</a>
+        <a href="/top_movers" class="btn btn-ghost" style="text-align:center;">{t("top_movers", lang)}</a>
+        <a href="/index_tracker" class="btn btn-ghost" style="text-align:center;">{t("index_tracker", lang)}</a>
     </div>
     <div class="card">
         <h3>Set Price Alert</h3>
@@ -2543,9 +2881,9 @@ def market():
         <p class="text-muted text-xs mt-10" style="color:var(--text-muted);">{t("loading", lang)}</p>
     </div>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
-@app.route('/crypto')
+@app.route('/crypto_prices')
 def crypto_prices():
     data = get_market_data()
     if 'user_id' in session:
@@ -2566,9 +2904,9 @@ def crypto_prices():
     <div class="card"><table><thead><tr><th>{t("symbol", lang)}</th><th>{t("price", lang)}</th><th>{t("change", lang)}</th></tr></thead><tbody>{table_rows}</tbody></table></div>
     <a href="/market" class="btn btn-ghost mt-10">{t("back", lang)}</a>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
-@app.route('/forex')
+@app.route('/forex_rates')
 def forex_rates():
     data = get_market_data()
     if 'user_id' in session:
@@ -2588,9 +2926,9 @@ def forex_rates():
     <div class="card"><table><thead><tr><th>Pair</th><th>Rate</th></tr></thead><tbody>{table_rows}</tbody></table></div>
     <a href="/market" class="btn btn-ghost mt-10">{t("back", lang)}</a>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
-@app.route('/top-movers')
+@app.route('/top_movers')
 def top_movers():
     data = get_market_data()
     if 'user_id' in session:
@@ -2632,9 +2970,9 @@ def top_movers():
     </div>
     <a href="/market" class="btn btn-ghost mt-10">{t("back", lang)}</a>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
-@app.route('/index-tracker')
+@app.route('/index_tracker')
 def index_tracker():
     data = get_market_data()
     if 'user_id' in session:
@@ -2655,8 +2993,9 @@ def index_tracker():
     <div class="card"><table><thead><tr><th>{t("name", lang)}</th><th>{t("price", lang)}</th><th>{t("change", lang)}</th></tr></thead><tbody>{table_rows}</tbody></table></div>
     <a href="/market" class="btn btn-ghost mt-10">{t("back", lang)}</a>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
+# ----- ANALYTICS -----
 @app.route('/analytics')
 def analytics():
     if 'user_id' not in session:
@@ -2727,10 +3066,14 @@ def analytics():
         <a href="{url_for('export_csv', data_type='income')}" class="btn btn-ghost">{t("export_csv", lang)}</a>
         <a href="{url_for('export_csv', data_type='crypto')}" class="btn btn-ghost">{t("export_csv", lang)}</a>
         <a href="{url_for('export_csv', data_type='stocks')}" class="btn btn-ghost">{t("export_csv", lang)}</a>
+        <a href="{url_for('export_excel', data_type='projects')}" class="btn btn-ghost">📊 Excel</a>
+        <a href="{url_for('export_excel', data_type='income')}" class="btn btn-ghost">📊 Excel</a>
+        <a href="{url_for('export_excel', data_type='stocks')}" class="btn btn-ghost">📊 Excel</a>
     </div></div>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
+# ----- EXPORT CSV -----
 @app.route('/export/<data_type>')
 def export_csv(data_type):
     if 'user_id' not in session:
@@ -2772,6 +3115,46 @@ def export_csv(data_type):
     output.seek(0)
     return Response(output, mimetype='text/csv', headers={'Content-Disposition': f'attachment; filename={filename}'})
 
+# ----- EXPORT EXCEL -----
+@app.route('/export/excel/<data_type>')
+def export_excel(data_type):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        return redirect(url_for('login'))
+    try:
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        if data_type == 'projects':
+            ws.append(['Name', 'Status', 'Progress', 'Due Date', 'Notes', 'Last Updated'])
+            for p in Project.query.filter_by(user_id=user.id).all():
+                ws.append([p.name, p.status, p.progress, p.due_date or '', p.notes or '', p.last_updated])
+            filename = 'summit_projects.xlsx'
+        elif data_type == 'income':
+            ws.append(['Source', 'Amount (R)', 'Date', 'Notes'])
+            for i in Income.query.filter_by(user_id=user.id).all():
+                ws.append([i.source, i.amount, i.date, i.notes or ''])
+            filename = 'summit_income.xlsx'
+        elif data_type == 'stocks':
+            ws.append(['Symbol', 'Shares', 'Purchase Price', 'Dividend Yield', 'Notes'])
+            for s in Stock.query.filter_by(user_id=user.id).all():
+                ws.append([s.symbol, s.shares, s.purchase_price or '', s.dividend_yield or '', s.notes or ''])
+            filename = 'summit_stocks.xlsx'
+        else:
+            flash('Invalid export type', 'danger')
+            return redirect(url_for('analytics'))
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return Response(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                       headers={'Content-Disposition': f'attachment; filename={filename}'})
+    except ImportError:
+        flash('Excel export requires openpyxl. Install it with: pip install openpyxl', 'danger')
+        return redirect(url_for('analytics'))
+
+# ----- CHARTS -----
 @app.route('/charts')
 def charts():
     if 'user_id' not in session:
@@ -2817,27 +3200,17 @@ def charts():
     income_labels_js = json.dumps(income_labels)
     income_values_js = json.dumps(income_values)
     expense_values_js = json.dumps(expense_values)
+    total_income = sum(convert_currency(i.amount, currency) for i in incomes)
+    total_crypto = sum(convert_currency(c.value_zar, currency) for c in cryptos)
     page = f"""
     <h2 style="font-size:24px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">{t("charts", lang)}</h2>
     <div class="chart-container">
-        <div class="chart-box">
-            <h4>{t("portfolio", lang)} {t("allocation", lang)}</h4>
-            <canvas id="allocationChart"></canvas>
-        </div>
-        <div class="chart-box">
-            <h4>Income vs Expenses</h4>
-            <canvas id="incomeExpenseChart"></canvas>
-        </div>
+        <div class="chart-box"><h4>{t("portfolio", lang)} {t("allocation", lang)}</h4><canvas id="allocationChart"></canvas></div>
+        <div class="chart-box"><h4>Income vs Expenses</h4><canvas id="incomeExpenseChart"></canvas></div>
     </div>
     <div class="chart-container">
-        <div class="chart-box">
-            <h4>{t("stocks", lang)} {t("value", lang)}</h4>
-            <canvas id="stockChart"></canvas>
-        </div>
-        <div class="chart-box">
-            <h4>{t("income", lang)} vs {t("crypto", lang)}</h4>
-            <canvas id="comparisonChart"></canvas>
-        </div>
+        <div class="chart-box"><h4>{t("stocks", lang)} {t("value", lang)}</h4><canvas id="stockChart"></canvas></div>
+        <div class="chart-box"><h4>{t("income", lang)} vs {t("crypto", lang)}</h4><canvas id="comparisonChart"></canvas></div>
     </div>
     <div class="card">
         <h3>{t("stock_history", lang)}</h3>
@@ -2845,147 +3218,34 @@ def charts():
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
             {"".join([f'<button onclick="loadStockHistory(\'{s.symbol}\')" class="btn btn-ghost btn-sm">{s.symbol}</button>' for s in stocks[:10]])}
         </div>
-        <div style="position:relative;height:200px;">
-            <canvas id="stockHistoryChart"></canvas>
-        </div>
+        <div style="position:relative;height:200px;"><canvas id="stockHistoryChart"></canvas></div>
     </div>
     <script>
-        var ctx1 = document.getElementById('allocationChart').getContext('2d');
-        new Chart(ctx1, {{
-            type: 'pie',
-            data: {{
-                labels: {crypto_labels_js},
-                datasets: [{{
-                    data: {crypto_values_js},
-                    backgroundColor: ['#3b82f6', '#8b5cf6', '#ec4899', '#22c55e', '#facc15', '#ef4444'],
-                }}]
-            }},
-            options: {{
-                responsive: true,
-                plugins: {{
-                    legend: {{ labels: {{ color: '#e8edf5' }} }}
-                }}
-            }}
-        }});
-        var ctx2 = document.getElementById('incomeExpenseChart').getContext('2d');
-        new Chart(ctx2, {{
-            type: 'bar',
-            data: {{
-                labels: {income_labels_js},
-                datasets: [
-                    {{
-                        label: 'Income',
-                        data: {income_values_js},
-                        backgroundColor: '#22c55e',
-                        borderColor: '#22c55e',
-                        borderWidth: 1
-                    }},
-                    {{
-                        label: 'Expenses',
-                        data: {expense_values_js},
-                        backgroundColor: '#ef4444',
-                        borderColor: '#ef4444',
-                        borderWidth: 1
-                    }}
-                ]
-            }},
-            options: {{
-                responsive: true,
-                plugins: {{
-                    legend: {{ labels: {{ color: '#e8edf5' }} }}
-                }},
-                scales: {{
-                    y: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
-                    x: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }}
-                }}
-            }}
-        }});
-        var ctx3 = document.getElementById('stockChart').getContext('2d');
-        new Chart(ctx3, {{
-            type: 'bar',
-            data: {{
-                labels: {stock_labels_js},
-                datasets: [{{
-                    label: '{t("value", lang)}',
-                    data: {stock_values_js},
-                    backgroundColor: '#60a5fa',
-                    borderColor: '#60a5fa',
-                    borderWidth: 1
-                }}]
-            }},
-            options: {{
-                responsive: true,
-                plugins: {{
-                    legend: {{ labels: {{ color: '#e8edf5' }} }}
-                }},
-                scales: {{
-                    y: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
-                    x: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }}
-                }}
-            }}
-        }});
-        var totalIncome = {sum(convert_currency(i.amount, currency) for i in incomes)};
-        var totalCrypto = {sum(convert_currency(c.value_zar, currency) for c in cryptos)};
-        var ctx4 = document.getElementById('comparisonChart').getContext('2d');
-        new Chart(ctx4, {{
-            type: 'doughnut',
-            data: {{
-                labels: ['{t("income", lang)}', '{t("crypto", lang)}'],
-                datasets: [{{
-                    data: [totalIncome, totalCrypto],
-                    backgroundColor: ['#22c55e', '#60a5fa'],
-                }}]
-            }},
-            options: {{
-                responsive: true,
-                plugins: {{
-                    legend: {{ labels: {{ color: '#e8edf5' }} }}
-                }}
-            }}
-        }});
+        var allocationData = {{ labels: {crypto_labels_js}, datasets: [{{ data: {crypto_values_js}, backgroundColor: ['#3b82f6','#8b5cf6','#ec4899','#22c55e','#facc15','#ef4444'] }}] }};
+        var incomeExpenseData = {{ labels: {income_labels_js}, datasets: [ {{ label: 'Income', data: {income_values_js}, backgroundColor: '#22c55e' }}, {{ label: 'Expenses', data: {expense_values_js}, backgroundColor: '#ef4444' }} ] }};
+        var stockData = {{ labels: {stock_labels_js}, datasets: [{{ label: '{t("value", lang)}', data: {stock_values_js}, backgroundColor: '#60a5fa' }}] }};
+        var comparisonData = {{ labels: ['{t("income", lang)}', '{t("crypto", lang)}'], datasets: [{{ data: [{total_income}, {total_crypto}], backgroundColor: ['#22c55e', '#60a5fa'] }}] }};
+        new Chart(document.getElementById('allocationChart'), {{ type: 'pie', data: allocationData, options: {{ responsive: true, plugins: {{ legend: {{ labels: {{ color: '#e8edf5' }} }} }} }} }});
+        new Chart(document.getElementById('incomeExpenseChart'), {{ type: 'bar', data: incomeExpenseData, options: {{ responsive: true, plugins: {{ legend: {{ labels: {{ color: '#e8edf5' }} }} }}, scales: {{ y: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }}, x: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }} }} }} }});
+        new Chart(document.getElementById('stockChart'), {{ type: 'bar', data: stockData, options: {{ responsive: true, plugins: {{ legend: {{ labels: {{ color: '#e8edf5' }} }} }}, scales: {{ y: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }}, x: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }} }} }} }});
+        new Chart(document.getElementById('comparisonChart'), {{ type: 'doughnut', data: comparisonData, options: {{ responsive: true, plugins: {{ legend: {{ labels: {{ color: '#e8edf5' }} }} }} }} }});
         var stockCtx = document.getElementById('stockHistoryChart').getContext('2d');
         var stockChartInstance = null;
         function loadStockHistory(symbol) {{
-            fetch('/stock_history/' + symbol)
-                .then(response => response.json())
-                .then(data => {{
-                    if (stockChartInstance) {{
-                        stockChartInstance.destroy();
-                    }}
-                    stockChartInstance = new Chart(stockCtx, {{
-                        type: 'line',
-                        data: {{
-                            labels: data.dates,
-                            datasets: [{{
-                                label: symbol + ' Price',
-                                data: data.prices,
-                                borderColor: '#8b5cf6',
-                                backgroundColor: 'rgba(139,92,246,0.1)',
-                                fill: true,
-                                tension: 0.4
-                            }}]
-                        }},
-                        options: {{
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {{
-                                legend: {{ labels: {{ color: '#e8edf5' }} }}
-                            }},
-                            scales: {{
-                                y: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
-                                x: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }}
-                            }}
-                        }}
-                    }});
+            fetch('/stock_history/' + symbol).then(r=>r.json()).then(data=>{{
+                if(stockChartInstance) stockChartInstance.destroy();
+                stockChartInstance = new Chart(stockCtx, {{
+                    type: 'line',
+                    data: {{ labels: data.dates, datasets: [{{ label: symbol+' Price', data: data.prices, borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,0.1)', fill: true, tension: 0.4 }}] }},
+                    options: {{ responsive: true, maintainAspectRatio: false, plugins: {{ legend: {{ labels: {{ color: '#e8edf5' }} }} }}, scales: {{ y: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }}, x: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }} }} }}
                 }});
+            }});
         }}
         var firstStock = document.querySelector('.btn-sm');
-        if (firstStock) {{
-            loadStockHistory(firstStock.textContent.trim());
-        }}
+        if(firstStock) loadStockHistory(firstStock.textContent.trim());
     </script>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
 @app.route('/stock_history/<symbol>')
 def stock_history(symbol):
@@ -2998,6 +3258,7 @@ def stock_history(symbol):
     except:
         return jsonify({'dates': [], 'prices': []})
 
+# ----- SETTINGS -----
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
     if 'user_id' not in session:
@@ -3009,7 +3270,7 @@ def settings():
         return redirect(url_for('login'))
     pref = UserPreference.query.filter_by(user_id=user.id).first()
     if not pref:
-        pref = UserPreference(user_id=user.id, currency='ZAR', language='en')
+        pref = UserPreference(user_id=user.id, currency='ZAR', language='en', theme='dark')
         db.session.add(pref)
         db.session.commit()
     lang = pref.language
@@ -3081,26 +3342,47 @@ def settings():
             user.totp_secret = None
             db.session.commit()
             flash('2FA disabled.', 'info')
+        elif action == 'delete_account':
+            password = request.form.get('confirm_password')
+            if not password or not bcrypt.checkpw(password.encode(), user.password.encode()):
+                flash('Incorrect password. Account not deleted.', 'danger')
+                return redirect(url_for('settings'))
+            # Delete all user data
+            Project.query.filter_by(user_id=user.id).delete()
+            Income.query.filter_by(user_id=user.id).delete()
+            Crypto.query.filter_by(user_id=user.id).delete()
+            Stock.query.filter_by(user_id=user.id).delete()
+            Expense.query.filter_by(user_id=user.id).delete()
+            Liability.query.filter_by(user_id=user.id).delete()
+            Payment.query.filter_by(user_id=user.id).delete()
+            PriceAlert.query.filter_by(user_id=user.id).delete()
+            Milestone.query.filter_by(project_id=Project.query.filter_by(user_id=user.id).all()).delete()
+            UserPreference.query.filter_by(user_id=user.id).delete()
+            AuditLog.query.filter_by(user_id=user.id).delete()
+            Portfolio.query.filter_by(user_id=user.id).delete()
+            Budget.query.filter_by(user_id=user.id).delete()
+            db.session.delete(user)
+            db.session.commit()
+            session.clear()
+            flash('Account deleted successfully.', 'info')
+            return redirect(url_for('index'))
         return redirect(url_for('settings'))
     avatar_url = f"https://ui-avatars.com/api/?name={user.full_name}&background={user.avatar_color}&color=fff&size=80"
     page = f"""
     <h2 style="font-size:24px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">{t("settings", lang)}</h2>
     <div style="display:flex;align-items:center;gap:20px;margin-bottom:20px;">
         <img src="{avatar_url}" style="border-radius:50%; width:80px; height:80px; border:3px solid #3b82f6;">
-        <div>
-            <h3 style="color:var(--text-primary);font-size:20px;">{user.full_name}</h3>
-            <p style="color:var(--text-muted);">{user.email}</p>
-        </div>
+        <div><h3 style="color:var(--text-primary);font-size:20px;">{user.full_name}</h3><p style="color:var(--text-muted);">{user.email}</p></div>
     </div>
     <div class="card"><h3>{t("preferences", lang)}</h3>
     <form method="POST">
         <input type="hidden" name="action" value="update_preferences">
         <label style="color:var(--text-primary);font-weight:500;">{t("currency", lang)}</label>
         <select name="currency">
-            <option value="ZAR" {'selected' if pref.currency == 'ZAR' else ''}>R ZAR (South African Rand)</option>
-            <option value="USD" {'selected' if pref.currency == 'USD' else ''}>$ USD (US Dollar)</option>
-            <option value="EUR" {'selected' if pref.currency == 'EUR' else ''}>€ EUR (Euro)</option>
-            <option value="GBP" {'selected' if pref.currency == 'GBP' else ''}>£ GBP (British Pound)</option>
+            <option value="ZAR" {'selected' if pref.currency == 'ZAR' else ''}>R ZAR</option>
+            <option value="USD" {'selected' if pref.currency == 'USD' else ''}>$ USD</option>
+            <option value="EUR" {'selected' if pref.currency == 'EUR' else ''}>€ EUR</option>
+            <option value="GBP" {'selected' if pref.currency == 'GBP' else ''}>£ GBP</option>
         </select>
         <label style="color:var(--text-primary);font-weight:500;">{t("language", lang)}</label>
         <select name="language">
@@ -3143,15 +3425,33 @@ def settings():
         <button type="submit" class="btn {'btn-ghost' if user.is_2fa_enabled else ''}">{'Disable 2FA' if user.is_2fa_enabled else 'Setup 2FA'}</button>
     </form>
     ''' if not user.is_2fa_enabled else ''}</div>
+    <div class="card" style="border-color:rgba(239,68,68,0.3);">
+        <h3 style="color:#ef4444;">⚠️ Delete Account</h3>
+        <p style="color:var(--text-muted);font-size:14px;">This action cannot be undone. All your data will be permanently deleted.</p>
+        <form method="POST" onsubmit="return confirm('Are you sure you want to delete your account? This cannot be undone.');">
+            <input type="hidden" name="action" value="delete_account">
+            <input type="password" name="confirm_password" placeholder="Confirm your password" required>
+            <button type="submit" class="btn" style="background:#ef4444;color:white;">🗑️ Delete My Account</button>
+        </form>
+    </div>
     <div class="card"><h3>{t("account", lang)}</h3>
     <p style="color:var(--text-muted);">{t("plan", lang)}: <strong>{'Premium' if user.is_premium else 'Free'}</strong></p>
     <p style="color:var(--text-muted);">{t("member_since", lang)}: {user.created_at.strftime('%B %d, %Y')}</p>
     <a href="/upgrade" class="btn btn-ghost">{t("manage_subscription", lang)}</a></div>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
 @app.route('/settings/2fa')
 def settings_2fa():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        session.clear()
+        flash('Session expired. Please login again.', 'warning')
+        return redirect(url_for('login'))
+    pref = UserPreference.query.filter_by(user_id=user.id).first()
+    lang = pref.language if pref else 'en'
     img = request.args.get('img', '')
     page = f"""
     <h2 style="font-size:24px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">🔐 2FA Setup</h2>
@@ -3164,9 +3464,11 @@ def settings_2fa():
             <button type="submit" class="btn">Enable 2FA</button>
         </form>
     </div>
+    <a href="/settings" class="btn btn-ghost mt-10">{t('back', lang)}</a>
     """
-    return render_template_string(BASE_HTML, content=page, lang='en', t=t)
+    return render_template_string(BASE_HTML, content=page)
 
+# ----- UPGRADE -----
 @app.route('/upgrade')
 def upgrade():
     if 'user_id' not in session:
@@ -3192,8 +3494,9 @@ def upgrade():
         <div class="card" style="text-align:center;border-color:var(--border-color);margin-top:24px;"><p class="text-muted text-sm">{t("payment_note", lang)}</p></div>
     </div>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
+# ----- PAYMENT -----
 @app.route('/verify_payment', methods=['POST'])
 def verify_payment():
     if 'user_id' not in session:
@@ -3282,8 +3585,9 @@ def payment_beta():
         }});
     </script>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
+# ----- EXPORT PDF -----
 @app.route('/export/pdf')
 def export_pdf():
     if 'user_id' not in session:
@@ -3312,17 +3616,8 @@ def export_pdf():
     html = f"""
     <!DOCTYPE html>
     <html><head><meta charset="utf-8"><title>Summit Report</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; padding: 40px; background: white; color: #333; }}
-        h1 {{ color: #3b82f6; }}
-        .card {{ border: 1px solid #ddd; border-radius: 12px; padding: 20px; margin: 16px 0; }}
-        .stat {{ display: inline-block; width: 30%; text-align: center; padding: 16px; margin: 8px; background: #f5f5f5; border-radius: 8px; }}
-        .stat h2 {{ margin: 0; font-size: 24px; }}
-        .stat p {{ margin: 4px 0 0; color: #666; }}
-        .footer {{ margin-top: 40px; text-align: center; color: #999; font-size: 12px; }}
-    </style>
-    </head>
-    <body>
+    <style>body{{font-family:Arial,sans-serif;padding:40px;background:white;color:#333;}}h1{{color:#3b82f6;}}.card{{border:1px solid #ddd;border-radius:12px;padding:20px;margin:16px 0;}}.stat{{display:inline-block;width:30%;text-align:center;padding:16px;margin:8px;background:#f5f5f5;border-radius:8px;}}.stat h2{{margin:0;font-size:24px;}}.stat p{{margin:4px 0 0;color:#666;}}.footer{{margin-top:40px;text-align:center;color:#999;font-size:12px;}}</style>
+    </head><body>
         <h1>🏔️ Summit Report</h1>
         <p>Generated for {user.full_name} on {datetime.utcnow().strftime('%B %d, %Y')}</p>
         <div class="card"><h3>Net Worth</h3><div style="text-align:center;padding:20px;"><div style="font-size:48px;font-weight:bold;color:{'#22c55e' if net_worth >= 0 else '#ef4444'};">{currency_symbol}{net_worth:.2f}</div></div></div>
@@ -3333,8 +3628,7 @@ def export_pdf():
         <div class="stat"><h2 style="color:#ef4444;">{currency_symbol}{total_liabilities:.2f}</h2><p>Liabilities</p></div>
         </div>
         <div class="footer"><p>© 2026 Summit — summit.onrender.com</p><p>This report is for informational purposes only. Not financial advice.</p></div>
-    </body>
-    </html>
+    </body></html>
     """
     try:
         from xhtml2pdf import pisa
@@ -3345,6 +3639,7 @@ def export_pdf():
     except ImportError:
         return html
 
+# ----- PAYMENT WEBHOOK -----
 @app.route('/payment/webhook', methods=['POST'])
 def payment_webhook():
     try:
@@ -3369,55 +3664,9 @@ def payment_webhook():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@app.route('/admin/upgrade/<int:user_id>')
-def admin_upgrade(user_id):
-    password = request.args.get('password', '')
-    if password != 'summit2026':
-        return "Unauthorized", 401
-    user = User.query.get(user_id)
-    if not user:
-        flash('User not found', 'danger')
-        return redirect(url_for('admin'))
-    if user.is_owner:
-        flash('Cannot upgrade owner.', 'warning')
-        return redirect(url_for('admin'))
-    if user.is_premium and user.premium_until and user.premium_until > datetime.utcnow():
-        flash(f'{user.full_name} already Premium until {user.premium_until.strftime("%Y-%m-%d")}', 'warning')
-        return redirect(url_for('admin'))
-    user.is_premium = True
-    user.premium_until = datetime.utcnow() + timedelta(days=30)
-    db.session.commit()
-    log_audit(user_id=user.id, action='premium_purchase', details=f'Admin upgraded {user.full_name} to Premium', ip_address=request.remote_addr)
-    flash(f'✅ Successfully upgraded {user.full_name} to Premium!', 'success')
-    return redirect(url_for('admin'))
-
-@app.route('/faq')
-def faq():
-    lang = 'en'
-    if 'user_id' in session:
-        user = User.query.get(session['user_id'])
-        if user:
-            pref = UserPreference.query.filter_by(user_id=user.id).first()
-            if pref:
-                lang = pref.language
-    page = f"""
-    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">❓ {t('faq', lang)}</h2>
-    <div class="card">
-        <h3>{t('faq_question_1', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_1', lang)}</p><hr style="border-color:var(--border-color);">
-        <h3>{t('faq_question_2', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_2', lang)}</p><hr style="border-color:var(--border-color);">
-        <h3>{t('faq_question_3', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_3', lang)}</p><hr style="border-color:var(--border-color);">
-        <h3>{t('faq_question_4', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_4', lang)}</p><hr style="border-color:var(--border-color);">
-        <h3>{t('faq_question_5', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_5', lang)}</p><hr style="border-color:var(--border-color);">
-        <h3>{t('faq_question_6', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_6', lang)}</p><hr style="border-color:var(--border-color);">
-        <h3>{t('faq_question_7', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_7', lang)}</p><hr style="border-color:var(--border-color);">
-        <h3>{t('faq_question_8', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_8', lang)}</p>
-    </div>
-    <a href="/dashboard" class="btn btn-ghost mt-10">{t('back', lang)}</a>
-    """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
-
-@app.route('/watchlist/toggle/<symbol>', methods=['POST'])
-def toggle_watchlist(symbol):
+# ----- EXPENSES -----
+@app.route('/expenses', methods=['GET', 'POST'])
+def expenses():
     if 'user_id' not in session:
         return redirect(url_for('login'))
     user = User.query.get(session['user_id'])
@@ -3425,18 +3674,170 @@ def toggle_watchlist(symbol):
         session.clear()
         flash('Session expired. Please login again.', 'warning')
         return redirect(url_for('login'))
-    stock = Stock.query.filter_by(user_id=user.id, symbol=symbol).first()
-    if stock:
-        stock.is_watchlisted = not stock.is_watchlisted
+    pref = UserPreference.query.filter_by(user_id=user.id).first()
+    lang = pref.language if pref else 'en'
+    currency = pref.currency if pref else 'ZAR'
+    currency_symbol = get_currency_symbol(currency)
+    if request.method == 'POST':
+        description = request.form.get('description')
+        amount = request.form.get('amount')
+        category = request.form.get('category')
+        date_str = request.form.get('date')
+        is_recurring = request.form.get('is_recurring') == 'on'
+        frequency = request.form.get('frequency', 'monthly')
+        portfolio_id = request.form.get('portfolio_id')
+        if not description or not amount:
+            flash('Description and amount are required.', 'danger')
+            return redirect(url_for('expenses'))
+        try:
+            amount = float(amount)
+        except ValueError:
+            flash('Invalid amount.', 'danger')
+            return redirect(url_for('expenses'))
+        date_obj = datetime.utcnow().date()
+        if date_str:
+            try:
+                date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+            except:
+                pass
+        expense = Expense(user_id=user.id, description=description, amount=amount, category=category, date=date_obj, is_recurring=is_recurring, frequency=frequency, portfolio_id=portfolio_id if portfolio_id else None)
+        db.session.add(expense)
         db.session.commit()
-        flash(f"{symbol} watchlist updated!", "success")
-    else:
-        stock = Stock(user_id=user.id, symbol=symbol, shares=0, purchase_price=0, is_watchlisted=True)
-        db.session.add(stock)
-        db.session.commit()
-        flash(f"{symbol} added to watchlist!", "success")
-    return redirect(url_for('market'))
+        flash('Expense added!', 'success')
+        return redirect(url_for('expenses'))
+    all_expenses = Expense.query.filter_by(user_id=user.id).order_by(Expense.date.desc()).all()
+    total_expenses_zar = sum(e.amount for e in all_expenses)
+    total_expenses = convert_currency(total_expenses_zar, currency)
+    total_income_zar = sum(i.amount for i in Income.query.filter_by(user_id=user.id).all())
+    total_income = convert_currency(total_income_zar, currency)
+    net_savings = total_income - total_expenses
+    portfolios = Portfolio.query.filter_by(user_id=user.id).all()
+    portfolio_options = '<select name="portfolio_id"><option value="">None</option>'
+    for p in portfolios:
+        portfolio_options += f'<option value="{p.id}">{p.name}</option>'
+    portfolio_options += '</select>'
+    table_rows = ""
+    for e in all_expenses:
+        category_display = e.category or 'Other'
+        recurring_badge = '🔄' if e.is_recurring else ''
+        e_amount = convert_currency(e.amount, currency)
+        table_rows += f"""
+        <tr>
+            <td>{e.description}</td>
+            <td>{category_display}</td>
+            <td style="color:#ef4444;">{currency_symbol}{e_amount:.2f}</td>
+            <td>{e.date.strftime('%Y-%m-%d')}</td>
+            <td>{recurring_badge}</td>
+        </tr>
+        """
+    page = f"""
+    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">💰 {t('expenses', lang)}</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px;">
+        <div class="stat"><h2 style="color:#ef4444;">{currency_symbol}{total_expenses:.2f}</h2><p>{t('total_expenses', lang)}</p></div>
+        <div class="stat"><h2 style="color:#22c55e;">{currency_symbol}{total_income:.2f}</h2><p>{t('income', lang)}</p></div>
+        <div class="stat" style="border-color:{'rgba(34,197,94,0.3)' if net_savings >= 0 else 'rgba(239,68,68,0.3)'};">
+            <h2 style="color:{'#22c55e' if net_savings >= 0 else '#ef4444'};">{currency_symbol}{net_savings:.2f}</h2><p>Net Savings</p>
+        </div>
+    </div>
+    <div class="card"><h3>{t('add_expense', lang)}</h3>
+    <form method="POST">
+        <input type="text" name="description" placeholder="{t('description', lang)}" required>
+        <input type="number" step="0.01" name="amount" placeholder="{t('amount', lang)}" required>
+        <select name="category">
+            <option value="Food">{t('food', lang)}</option>
+            <option value="Transport">{t('transport', lang)}</option>
+            <option value="Entertainment">{t('entertainment', lang)}</option>
+            <option value="Bills">{t('bills', lang)}</option>
+            <option value="Shopping">{t('shopping', lang)}</option>
+            <option value="Other">{t('other', lang)}</option>
+        </select>
+        <input type="date" name="date">
+        <div style="display:flex;gap:12px;align-items:center;margin:8px 0;">
+            <label style="color:var(--text-secondary);font-size:14px;"><input type="checkbox" name="is_recurring"> 🔄 Recurring</label>
+            <select name="frequency"><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
+        </div>
+        {portfolio_options}
+        <button type="submit" class="btn">{t('add_expense', lang)}</button>
+    </form></div>
+    {f'''
+    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;"><h3>{t('expenses', lang)}</h3><span class="text-muted text-sm">{t('total', lang)}: <strong style="color:#ef4444;">{currency_symbol}{total_expenses:.2f}</strong></span></div>
+    <table><thead><tr><th>{t('description', lang)}</th><th>{t('category', lang)}</th><th>{t('amount', lang)}</th><th>{t('date', lang)}</th><th>Recurring</th></tr></thead><tbody>{table_rows}</tbody></table></div>
+    ''' if all_expenses else f'<p class="text-muted" style="color:var(--text-muted);">{t("no_expenses", lang)}</p>'}
+    <a href="/dashboard" class="btn btn-ghost mt-10">{t('back', lang)}</a>
+    """
+    return render_template_string(BASE_HTML, content=page)
 
+# ----- LIABILITIES -----
+@app.route('/liabilities', methods=['GET', 'POST'])
+def liabilities():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        session.clear()
+        flash('Session expired. Please login again.', 'warning')
+        return redirect(url_for('login'))
+    pref = UserPreference.query.filter_by(user_id=user.id).first()
+    lang = pref.language if pref else 'en'
+    currency = pref.currency if pref else 'ZAR'
+    currency_symbol = get_currency_symbol(currency)
+    if request.method == 'POST':
+        name = request.form.get('name')
+        amount = request.form.get('amount')
+        interest_rate = request.form.get('interest_rate')
+        notes = request.form.get('notes', '')
+        if not name or not amount:
+            flash('Name and amount are required.', 'danger')
+            return redirect(url_for('liabilities'))
+        try:
+            amount = float(amount)
+            interest_rate = float(interest_rate) if interest_rate else None
+        except ValueError:
+            flash('Invalid amount.', 'danger')
+            return redirect(url_for('liabilities'))
+        liability = Liability(user_id=user.id, name=name, amount=amount, interest_rate=interest_rate, notes=notes)
+        db.session.add(liability)
+        db.session.commit()
+        flash('Liability added!', 'success')
+        return redirect(url_for('liabilities'))
+    all_liabilities = Liability.query.filter_by(user_id=user.id).order_by(Liability.date.desc()).all()
+    total_zar = sum(l.amount for l in all_liabilities)
+    total = convert_currency(total_zar, currency)
+    table_rows = ""
+    for l in all_liabilities:
+        interest_display = f"{l.interest_rate}%" if l.interest_rate else "-"
+        l_amount = convert_currency(l.amount, currency)
+        table_rows += f"""
+        <tr>
+            <td>{l.name}</td>
+            <td style="color:#ef4444;">{currency_symbol}{l_amount:.2f}</td>
+            <td>{interest_display}</td>
+            <td>{l.notes or "-"}</td>
+            <td>{l.date.strftime('%Y-%m-%d')}</td>
+        </tr>
+        """
+    page = f"""
+    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">💳 Liabilities</h2>
+    <div class="grid">
+        <div class="stat"><h2 style="color:#ef4444;">{currency_symbol}{total:.2f}</h2><p>Total Liabilities</p></div>
+        <div class="stat"><h2 style="color:#22c55e;">{currency_symbol}{total:.2f}</h2><p>Total Debt</p></div>
+    </div>
+    <div class="card"><h3>Add Liability</h3>
+    <form method="POST">
+        <input type="text" name="name" placeholder="Name (e.g. Student Loan, Car Loan)" required>
+        <input type="number" step="0.01" name="amount" placeholder="Amount" required>
+        <input type="number" step="0.01" name="interest_rate" placeholder="Interest Rate % (optional)">
+        <textarea name="notes" placeholder="Notes" rows="2"></textarea>
+        <button type="submit" class="btn">Add Liability</button>
+    </form></div>
+    {f'''
+    <div class="card"><table><thead><tr><th>Name</th><th>Amount</th><th>Interest Rate</th><th>Notes</th><th>Date</th></tr></thead><tbody>{table_rows}</tbody></table></div>
+    ''' if all_liabilities else '<p class="text-muted" style="color:var(--text-muted);">No liabilities yet.</p>'}
+    <a href="/dashboard" class="btn btn-ghost mt-10">{t('back', lang)}</a>
+    """
+    return render_template_string(BASE_HTML, content=page)
+
+# ----- REFERRAL -----
 @app.route('/referral')
 def referral():
     if 'user_id' not in session:
@@ -3465,8 +3866,7 @@ def referral():
         <div class="stat"><h2>{referral_count}</h2><p>{t('referral_friends', lang)}</p></div>
         <div class="stat"><h2>{referral_count // 5}</h2><p>Free Months Earned</p></div>
         <div class="stat" style="border-color:{'rgba(34,197,94,0.3)' if earned_premium else 'var(--border-color)'};">
-            <h2 style="color:{'#22c55e' if earned_premium else 'var(--text-muted)'};">{earned_premium}</h2>
-            <p>Premium Status</p>
+            <h2 style="color:{'#22c55e' if earned_premium else 'var(--text-muted)'};">{earned_premium}</h2><p>Premium Status</p>
         </div>
     </div>
     <div class="card" style="text-align:center;border-color:rgba(59,130,246,0.2);">
@@ -3490,196 +3890,42 @@ def referral():
     }}
     </script>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
-@app.route('/alert/add', methods=['POST'])
-def add_alert():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    user = User.query.get(session['user_id'])
-    if not user:
-        session.clear()
-        flash('Session expired. Please login again.', 'warning')
-        return redirect(url_for('login'))
-    symbol = request.form.get('symbol', '').upper().strip()
-    target_price = request.form.get('target_price')
-    condition = request.form.get('condition')
-    if not symbol or not target_price or not condition:
-        flash('All fields are required.', 'danger')
-        return redirect(url_for('market'))
-    try:
-        target_price = float(target_price)
-    except ValueError:
-        flash('Invalid target price.', 'danger')
-        return redirect(url_for('market'))
-    alert = PriceAlert(user_id=user.id, symbol=symbol, target_price=target_price, condition=condition)
-    db.session.add(alert)
-    db.session.commit()
-    flash(f"Alert set for {symbol} when it goes {condition} R{target_price}", "success")
-    return redirect(url_for('market'))
-
-@app.route('/alert/delete/<int:alert_id>', methods=['POST'])
-def delete_alert(alert_id):
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    user = User.query.get(session['user_id'])
-    if not user:
-        session.clear()
-        flash('Session expired. Please login again.', 'warning')
-        return redirect(url_for('login'))
-    alert = PriceAlert.query.get_or_404(alert_id)
-    if alert.user_id != user.id:
-        flash('Unauthorized!', 'danger')
-        return redirect(url_for('dashboard'))
-    db.session.delete(alert)
-    db.session.commit()
-    flash('Alert deleted.', 'info')
-    return redirect(url_for('market'))
-
-@app.route('/expenses', methods=['GET', 'POST'])
-def expenses():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    user = User.query.get(session['user_id'])
-    if not user:
-        session.clear()
-        flash('Session expired. Please login again.', 'warning')
-        return redirect(url_for('login'))
-    pref = UserPreference.query.filter_by(user_id=user.id).first()
-    lang = pref.language if pref else 'en'
-    currency = pref.currency if pref else 'ZAR'
-    currency_symbol = get_currency_symbol(currency)
-    if request.method == 'POST':
-        description = request.form.get('description')
-        amount = request.form.get('amount')
-        category = request.form.get('category')
-        date_str = request.form.get('date')
-        is_recurring = request.form.get('is_recurring') == 'on'
-        frequency = request.form.get('frequency', 'monthly')
-        if not description or not amount:
-            flash('Description and amount are required.', 'danger')
-            return redirect(url_for('expenses'))
-        try:
-            amount = float(amount)
-        except ValueError:
-            flash('Invalid amount.', 'danger')
-            return redirect(url_for('expenses'))
-        date_obj = datetime.utcnow().date()
-        if date_str:
-            try:
-                date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
-            except:
-                pass
-        expense = Expense(user_id=user.id, description=description, amount=amount, category=category, date=date_obj, is_recurring=is_recurring, frequency=frequency)
-        db.session.add(expense)
-        db.session.commit()
-        flash('Expense added!', 'success')
-        return redirect(url_for('expenses'))
-    all_expenses = Expense.query.filter_by(user_id=user.id).order_by(Expense.date.desc()).all()
-    total_expenses_zar = sum(e.amount for e in all_expenses)
-    total_expenses = convert_currency(total_expenses_zar, currency)
-    total_income_zar = sum(i.amount for i in Income.query.filter_by(user_id=user.id).all())
-    total_income = convert_currency(total_income_zar, currency)
-    net_savings = total_income - total_expenses
-    table_rows = ""
-    for e in all_expenses:
-        category_display = e.category or 'Other'
-        recurring_badge = '🔄' if e.is_recurring else ''
-        e_amount = convert_currency(e.amount, currency)
-        table_rows += f"""
-        <tr>
-            <td>{e.description}</td>
-            <td>{category_display}</td>
-            <td style="color:#ef4444;">{currency_symbol}{e_amount:.2f}</td>
-            <td>{e.date.strftime('%Y-%m-%d')}</td>
-            <td>{recurring_badge}</td>
-        </tr>
-        """
+# ----- FAQ -----
+@app.route('/faq')
+def faq():
+    lang = 'en'
+    if 'user_id' in session:
+        user = User.query.get(session['user_id'])
+        if user:
+            pref = UserPreference.query.filter_by(user_id=user.id).first()
+            if pref:
+                lang = pref.language
     page = f"""
-    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">💰 {t('expenses', lang)}</h2>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px;">
-        <div class="stat"><h2 style="color:#ef4444;">{currency_symbol}{total_expenses:.2f}</h2><p>{t('total_expenses', lang)}</p></div>
-        <div class="stat"><h2 style="color:#22c55e;">{currency_symbol}{total_income:.2f}</h2><p>{t('income', lang)}</p></div>
-        <div class="stat" style="border-color:{'rgba(34,197,94,0.3)' if net_savings >= 0 else 'rgba(239,68,68,0.3)'};">
-            <h2 style="color:{'#22c55e' if net_savings >= 0 else '#ef4444'};">{currency_symbol}{net_savings:.2f}</h2>
-            <p>Net Savings</p>
-        </div>
+    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">❓ {t('faq', lang)}</h2>
+    <div class="card">
+        <h3>{t('faq_question_1', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_1', lang)}</p>
+        <hr style="border-color:var(--border-color);">
+        <h3>{t('faq_question_2', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_2', lang)}</p>
+        <hr style="border-color:var(--border-color);">
+        <h3>{t('faq_question_3', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_3', lang)}</p>
+        <hr style="border-color:var(--border-color);">
+        <h3>{t('faq_question_4', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_4', lang)}</p>
+        <hr style="border-color:var(--border-color);">
+        <h3>{t('faq_question_5', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_5', lang)}</p>
+        <hr style="border-color:var(--border-color);">
+        <h3>{t('faq_question_6', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_6', lang)}</p>
+        <hr style="border-color:var(--border-color);">
+        <h3>{t('faq_question_7', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_7', lang)}</p>
+        <hr style="border-color:var(--border-color);">
+        <h3>{t('faq_question_8', lang)}</h3><p style="color:var(--text-secondary);">{t('faq_answer_8', lang)}</p>
     </div>
-    <div class="card"><h3>{t('add_expense', lang)}</h3>
-    <form method="POST">
-        <input type="text" name="description" placeholder="{t('description', lang)}" required>
-        <input type="number" step="0.01" name="amount" placeholder="{t('amount', lang)}" required>
-        <select name="category">
-            <option value="Food">{t('food', lang)}</option>
-            <option value="Transport">{t('transport', lang)}</option>
-            <option value="Entertainment">{t('entertainment', lang)}</option>
-            <option value="Bills">{t('bills', lang)}</option>
-            <option value="Shopping">{t('shopping', lang)}</option>
-            <option value="Other">{t('other', lang)}</option>
-        </select>
-        <input type="date" name="date">
-        <div style="display:flex;gap:12px;align-items:center;margin:8px 0;">
-            <label style="color:var(--text-secondary);font-size:14px;">
-                <input type="checkbox" name="is_recurring"> 🔄 Recurring
-            </label>
-            <select name="frequency">
-                <option value="monthly">Monthly</option>
-                <option value="yearly">Yearly</option>
-            </select>
-        </div>
-        <button type="submit" class="btn">{t('add_expense', lang)}</button>
-    </form></div>
-    {f'''
-    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;"><h3>{t('expenses', lang)}</h3><span class="text-muted text-sm">{t('total', lang)}: <strong style="color:#ef4444;">{currency_symbol}{total_expenses:.2f}</strong></span></div>
-    <table><thead><tr><th>{t('description', lang)}</th><th>{t('category', lang)}</th><th>{t('amount', lang)}</th><th>{t('date', lang)}</th><th>Recurring</th></tr></thead><tbody>{table_rows}</tbody></table></div>
-    ''' if all_expenses else f'<p class="text-muted" style="color:var(--text-muted);">{t("no_expenses", lang)}</p>'}
     <a href="/dashboard" class="btn btn-ghost mt-10">{t('back', lang)}</a>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
-@app.route('/milestone/add/<int:project_id>', methods=['POST'])
-def add_milestone(project_id):
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    user = User.query.get(session['user_id'])
-    if not user:
-        session.clear()
-        flash('Session expired. Please login again.', 'warning')
-        return redirect(url_for('login'))
-    project = Project.query.get_or_404(project_id)
-    if project.user_id != user.id:
-        flash('Unauthorized!', 'danger')
-        return redirect(url_for('dashboard'))
-    name = request.form.get('name')
-    if not name:
-        flash('Milestone name is required.', 'danger')
-        return redirect(url_for('projects'))
-    milestone = Milestone(project_id=project_id, name=name)
-    db.session.add(milestone)
-    db.session.commit()
-    update_project_progress(project_id)
-    flash('Milestone added!', 'success')
-    return redirect(url_for('projects'))
-
-@app.route('/milestone/toggle/<int:milestone_id>', methods=['POST'])
-def toggle_milestone(milestone_id):
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    user = User.query.get(session['user_id'])
-    if not user:
-        session.clear()
-        flash('Session expired. Please login again.', 'warning')
-        return redirect(url_for('login'))
-    milestone = Milestone.query.get_or_404(milestone_id)
-    project = Project.query.get(milestone.project_id)
-    if project.user_id != user.id:
-        flash('Unauthorized!', 'danger')
-        return redirect(url_for('dashboard'))
-    milestone.is_completed = not milestone.is_completed
-    db.session.commit()
-    update_project_progress(project.id)
-    return redirect(url_for('projects'))
-
+# ----- COMMUNITY -----
 @app.route('/community', methods=['GET', 'POST'])
 def community():
     if 'user_id' not in session:
@@ -3760,8 +4006,118 @@ def community():
     </div>
     <a href="/dashboard" class="btn btn-ghost mt-10">{t('back', lang)}</a>
     """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+    return render_template_string(BASE_HTML, content=page)
 
+# ----- WATCHLIST, PRICE ALERTS, MILESTONES -----
+@app.route('/watchlist/toggle/<symbol>', methods=['POST'])
+def toggle_watchlist(symbol):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        session.clear()
+        flash('Session expired. Please login again.', 'warning')
+        return redirect(url_for('login'))
+    stock = Stock.query.filter_by(user_id=user.id, symbol=symbol).first()
+    if stock:
+        stock.is_watchlisted = not stock.is_watchlisted
+        db.session.commit()
+        flash(f"{symbol} watchlist updated!", "success")
+    else:
+        stock = Stock(user_id=user.id, symbol=symbol, shares=0, purchase_price=0, is_watchlisted=True)
+        db.session.add(stock)
+        db.session.commit()
+        flash(f"{symbol} added to watchlist!", "success")
+    return redirect(url_for('market'))
+
+@app.route('/alert/add', methods=['POST'])
+def add_alert():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        session.clear()
+        flash('Session expired. Please login again.', 'warning')
+        return redirect(url_for('login'))
+    symbol = request.form.get('symbol', '').upper().strip()
+    target_price = request.form.get('target_price')
+    condition = request.form.get('condition')
+    if not symbol or not target_price or not condition:
+        flash('All fields are required.', 'danger')
+        return redirect(url_for('market'))
+    try:
+        target_price = float(target_price)
+    except ValueError:
+        flash('Invalid target price.', 'danger')
+        return redirect(url_for('market'))
+    alert = PriceAlert(user_id=user.id, symbol=symbol, target_price=target_price, condition=condition)
+    db.session.add(alert)
+    db.session.commit()
+    flash(f"Alert set for {symbol} when it goes {condition} R{target_price}", "success")
+    return redirect(url_for('market'))
+
+@app.route('/alert/delete/<int:alert_id>', methods=['POST'])
+def delete_alert(alert_id):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        session.clear()
+        flash('Session expired. Please login again.', 'warning')
+        return redirect(url_for('login'))
+    alert = PriceAlert.query.get_or_404(alert_id)
+    if alert.user_id != user.id:
+        flash('Unauthorized!', 'danger')
+        return redirect(url_for('dashboard'))
+    db.session.delete(alert)
+    db.session.commit()
+    flash('Alert deleted.', 'info')
+    return redirect(url_for('market'))
+
+@app.route('/milestone/add/<int:project_id>', methods=['POST'])
+def add_milestone(project_id):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        session.clear()
+        flash('Session expired. Please login again.', 'warning')
+        return redirect(url_for('login'))
+    project = Project.query.get_or_404(project_id)
+    if project.user_id != user.id:
+        flash('Unauthorized!', 'danger')
+        return redirect(url_for('dashboard'))
+    name = request.form.get('name')
+    if not name:
+        flash('Milestone name is required.', 'danger')
+        return redirect(url_for('projects'))
+    milestone = Milestone(project_id=project_id, name=name)
+    db.session.add(milestone)
+    db.session.commit()
+    update_project_progress(project_id)
+    flash('Milestone added!', 'success')
+    return redirect(url_for('projects'))
+
+@app.route('/milestone/toggle/<int:milestone_id>', methods=['POST'])
+def toggle_milestone(milestone_id):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        session.clear()
+        flash('Session expired. Please login again.', 'warning')
+        return redirect(url_for('login'))
+    milestone = Milestone.query.get_or_404(milestone_id)
+    project = Project.query.get(milestone.project_id)
+    if project.user_id != user.id:
+        flash('Unauthorized!', 'danger')
+        return redirect(url_for('dashboard'))
+    milestone.is_completed = not milestone.is_completed
+    db.session.commit()
+    update_project_progress(project.id)
+    return redirect(url_for('projects'))
+
+# ----- TELEGRAM WEBHOOK -----
 @app.route('/telegram/webhook', methods=['POST'])
 def telegram_webhook():
     if not TELEGRAM_TOKEN:
@@ -3821,6 +4177,259 @@ def telegram_webhook():
     send_telegram_message(str(chat_id), reply)
     return jsonify({'status': 'ok'}), 200
 
+# ----- NEW FEATURES: INSIGHTS, BUDGETS, PORTFOLIOS, STOCK COMPARISON -----
+@app.route('/insights')
+def insights():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        return redirect(url_for('login'))
+    total_income = sum(i.amount for i in Income.query.filter_by(user_id=user.id).all())
+    total_expenses = sum(e.amount for e in Expense.query.filter_by(user_id=user.id).all())
+    total_crypto = sum(c.value_zar for c in Crypto.query.filter_by(user_id=user.id).all())
+    total_stocks = 0
+    for s in Stock.query.filter_by(user_id=user.id).all():
+        price = get_stock_price(s.symbol)
+        if price:
+            total_stocks += price * s.shares
+    pref = UserPreference.query.filter_by(user_id=user.id).first()
+    lang = pref.language if pref else 'en'
+    currency = pref.currency if pref else 'ZAR'
+    currency_symbol = get_currency_symbol(currency)
+    total_income_c = convert_currency(total_income, currency)
+    total_expenses_c = convert_currency(total_expenses, currency)
+    total_crypto_c = convert_currency(total_crypto, currency)
+    total_stocks_c = convert_currency(total_stocks, currency)
+    page = f"""
+    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">🤖 Insights</h2>
+    <div class="card">
+        <h3>Your Financial Snapshot</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+            <div><p style="color:var(--text-muted);">Income</p><p style="font-size:24px;font-weight:700;color:#22c55e;">{currency_symbol}{total_income_c:.2f}</p></div>
+            <div><p style="color:var(--text-muted);">Expenses</p><p style="font-size:24px;font-weight:700;color:#ef4444;">{currency_symbol}{total_expenses_c:.2f}</p></div>
+            <div><p style="color:var(--text-muted);">Crypto</p><p style="font-size:24px;font-weight:700;color:#60a5fa;">{currency_symbol}{total_crypto_c:.2f}</p></div>
+            <div><p style="color:var(--text-muted);">Stocks</p><p style="font-size:24px;font-weight:700;color:#8b5cf6;">{currency_symbol}{total_stocks_c:.2f}</p></div>
+        </div>
+    </div>
+    <div class="card" style="text-align:center;border-color:rgba(59,130,246,0.2);">
+        <p style="color:var(--text-secondary);font-size:16px;margin-bottom:12px;">💡 Want a personalized breakdown of these numbers?</p>
+        <a href="{url_for('ai_assistant')}" class="btn">Ask the AI Financial Assistant</a>
+    </div>
+    """
+    return render_template_string(BASE_HTML, content=page)
+
+@app.route('/budgets', methods=['GET', 'POST'])
+def budgets():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        return redirect(url_for('login'))
+    pref = UserPreference.query.filter_by(user_id=user.id).first()
+    lang = pref.language if pref else 'en'
+    currency = pref.currency if pref else 'ZAR'
+    currency_symbol = get_currency_symbol(currency)
+    if request.method == 'POST':
+        category = request.form.get('category')
+        amount = request.form.get('amount')
+        month = int(request.form.get('month', datetime.utcnow().month))
+        year = int(request.form.get('year', datetime.utcnow().year))
+        if category and amount:
+            try:
+                amount = float(amount)
+                budget = Budget(user_id=user.id, category=category, amount=amount, month=month, year=year)
+                db.session.add(budget)
+                db.session.commit()
+                flash('Budget set!', 'success')
+            except ValueError:
+                flash('Invalid amount.', 'danger')
+        else:
+            flash('Category and amount are required.', 'danger')
+        return redirect(url_for('budgets'))
+    month = datetime.utcnow().month
+    year = datetime.utcnow().year
+    budgets = Budget.query.filter_by(user_id=user.id, month=month, year=year).all()
+    total_budget = sum(b.amount for b in budgets)
+    expenses = Expense.query.filter_by(user_id=user.id).all()
+    total_expenses = 0
+    for e in expenses:
+        if e.date.month == month and e.date.year == year:
+            total_expenses += e.amount
+    total_expenses_c = convert_currency(total_expenses, currency)
+    total_budget_c = convert_currency(total_budget, currency)
+    remaining = total_budget - total_expenses
+    remaining_c = convert_currency(remaining, currency)
+    page = f"""
+    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">📊 Budgets</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px;">
+        <div class="stat"><h2 style="color:#60a5fa;">{currency_symbol}{total_budget_c:.2f}</h2><p>Total Budget</p></div>
+        <div class="stat"><h2 style="color:#ef4444;">{currency_symbol}{total_expenses_c:.2f}</h2><p>Actual Spending</p></div>
+        <div class="stat" style="border-color:{'rgba(34,197,94,0.3)' if remaining >= 0 else 'rgba(239,68,68,0.3)'};">
+            <h2 style="color:{'#22c55e' if remaining >= 0 else '#ef4444'};">{currency_symbol}{remaining_c:.2f}</h2><p>Remaining</p>
+        </div>
+    </div>
+    <div class="card"><h3>Set Budget Category</h3>
+    <form method="POST">
+        <input type="text" name="category" placeholder="Category (e.g. Food, Transport)" required>
+        <input type="number" step="0.01" name="amount" placeholder="Budget Amount" required>
+        <input type="hidden" name="month" value="{datetime.utcnow().month}">
+        <input type="hidden" name="year" value="{datetime.utcnow().year}">
+        <button type="submit" class="btn">Set Budget</button>
+    </form></div>
+    <div class="card"><h3>Your Budgets</h3>
+    <table><thead><tr><th>Category</th><th>Budget</th><th>Spent</th><th>Remaining</th></tr></thead><tbody>
+    """
+    for b in budgets:
+        spent = 0
+        for e in expenses:
+            if e.category == b.category and e.date.month == month and e.date.year == year:
+                spent += e.amount
+        spent_c = convert_currency(spent, currency)
+        b_amount_c = convert_currency(b.amount, currency)
+        rem = b.amount - spent
+        rem_c = convert_currency(rem, currency)
+        color = "#22c55e" if rem >= 0 else "#ef4444"
+        page += f"""
+        <tr><td>{b.category}</td><td>{currency_symbol}{b_amount_c:.2f}</td><td>{currency_symbol}{spent_c:.2f}</td><td style="color:{color};">{currency_symbol}{rem_c:.2f}</td></tr>
+        """
+    page += """
+    </tbody></table></div>
+    <a href="/dashboard" class="btn btn-ghost mt-10">Back</a>
+    """
+    return render_template_string(BASE_HTML, content=page)
+
+@app.route('/portfolios', methods=['GET', 'POST'])
+def portfolios():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        return redirect(url_for('login'))
+    pref = UserPreference.query.filter_by(user_id=user.id).first()
+    lang = pref.language if pref else 'en'
+    if request.method == 'POST':
+        name = request.form.get('name')
+        if name:
+            portfolio = Portfolio(user_id=user.id, name=name)
+            db.session.add(portfolio)
+            db.session.commit()
+            flash('Portfolio created!', 'success')
+        else:
+            flash('Name is required.', 'danger')
+        return redirect(url_for('portfolios'))
+    portfolios = Portfolio.query.filter_by(user_id=user.id).all()
+    page = f"""
+    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">📂 Portfolios</h2>
+    <div class="card"><h3>Create New Portfolio</h3>
+    <form method="POST">
+        <input type="text" name="name" placeholder="Portfolio name (e.g. Personal, Business)" required>
+        <button type="submit" class="btn">Create</button>
+    </form></div>
+    <div class="card"><h3>Your Portfolios</h3>
+    <ul style="list-style:none;padding:0;">
+    """
+    for p in portfolios:
+        count = Project.query.filter_by(portfolio_id=p.id).count() + Income.query.filter_by(portfolio_id=p.id).count() + Crypto.query.filter_by(portfolio_id=p.id).count() + Stock.query.filter_by(portfolio_id=p.id).count()
+        page += f"""
+        <li style="padding:12px 0;border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;">
+            <span><strong>{p.name}</strong> <span style="color:var(--text-muted);font-size:12px;">({count} items)</span></span>
+            <span>
+                <a href="/portfolio/{p.id}" class="btn btn-ghost" style="padding:4px 12px;font-size:12px;">View</a>
+                <a href="/portfolio/delete/{p.id}" class="btn btn-ghost" style="padding:4px 12px;font-size:12px;color:#ef4444;" onclick="return confirm('Delete this portfolio?')">Delete</a>
+            </span>
+        </li>
+        """
+    page += """
+    </ul></div>
+    """
+    return render_template_string(BASE_HTML, content=page)
+
+@app.route('/portfolio/<int:portfolio_id>')
+def portfolio_view(portfolio_id):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        return redirect(url_for('login'))
+    portfolio = Portfolio.query.get_or_404(portfolio_id)
+    if portfolio.user_id != user.id:
+        flash('Unauthorized', 'danger')
+        return redirect(url_for('portfolios'))
+    projects = Project.query.filter_by(portfolio_id=portfolio_id).all()
+    incomes = Income.query.filter_by(portfolio_id=portfolio_id).all()
+    cryptos = Crypto.query.filter_by(portfolio_id=portfolio_id).all()
+    stocks = Stock.query.filter_by(portfolio_id=portfolio_id).all()
+    page = f"""
+    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">📂 {portfolio.name}</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
+        <div class="stat"><h2>{len(projects)}</h2><p>Projects</p></div>
+        <div class="stat"><h2>{len(incomes)}</h2><p>Income</p></div>
+        <div class="stat"><h2>{len(cryptos)}</h2><p>Crypto</p></div>
+        <div class="stat"><h2>{len(stocks)}</h2><p>Stocks</p></div>
+    </div>
+    <a href="/portfolios" class="btn btn-ghost">← Back to Portfolios</a>
+    """
+    return render_template_string(BASE_HTML, content=page)
+
+@app.route('/portfolio/delete/<int:portfolio_id>')
+def portfolio_delete(portfolio_id):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user = User.query.get(session['user_id'])
+    if not user:
+        return redirect(url_for('login'))
+    portfolio = Portfolio.query.get_or_404(portfolio_id)
+    if portfolio.user_id != user.id:
+        flash('Unauthorized', 'danger')
+        return redirect(url_for('portfolios'))
+    db.session.delete(portfolio)
+    db.session.commit()
+    flash('Portfolio deleted.', 'info')
+    return redirect(url_for('portfolios'))
+
+@app.route('/compare/<symbol1>/<symbol2>')
+def compare_stocks(symbol1, symbol2):
+    import yfinance as yf
+    data1 = yf.Ticker(symbol1).history(period="1mo")
+    data2 = yf.Ticker(symbol2).history(period="1mo")
+    dates = data1.index.strftime('%Y-%m-%d').tolist()
+    prices1 = data1['Close'].tolist()
+    prices2 = data2['Close'].tolist()
+    if prices1 and prices2:
+        p1_start = prices1[0]
+        p2_start = prices2[0]
+        if p1_start > 0 and p2_start > 0:
+            prices1 = [(p / p1_start) * 100 for p in prices1]
+            prices2 = [(p / p2_start) * 100 for p in prices2]
+    page = f"""
+    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">📊 {symbol1} vs {symbol2}</h2>
+    <div class="card" style="height:400px;"><canvas id="compareChart"></canvas></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;"><a href="/market" class="btn btn-ghost">← Back to Market</a></div>
+    <script>
+    new Chart(document.getElementById('compareChart'), {{
+        type: 'line',
+        data: {{
+            labels: {json.dumps(dates)},
+            datasets: [
+                {{ label: '{symbol1}', data: {json.dumps(prices1)}, borderColor: '#3b82f6', fill: false }},
+                {{ label: '{symbol2}', data: {json.dumps(prices2)}, borderColor: '#ef4444', fill: false }}
+            ]
+        }},
+        options: {{
+            responsive: true, maintainAspectRatio: false,
+            plugins: {{ legend: {{ labels: {{ color: '#e8edf5' }} }} }},
+            scales: {{
+                y: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }},
+                x: {{ ticks: {{ color: '#6b7280' }}, grid: {{ color: 'rgba(255,255,255,0.05)' }} }}
+            }}
+        }}
+    }});
+    </script>
+    """
+    return render_template_string(BASE_HTML, content=page)
+
+# ----- STATIC FILES FALLBACK -----
 @app.route('/static/manifest.json')
 def manifest_fallback():
     return '', 204
@@ -3828,98 +4437,7 @@ def manifest_fallback():
 @app.route('/static/sw.js')
 def sw_fallback():
     return '', 204
-@app.route('/liabilities', methods=['GET', 'POST'])
-def liabilities():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    user = User.query.get(session['user_id'])
-    if not user:
-        session.clear()
-        flash('Session expired. Please login again.', 'warning')
-        return redirect(url_for('login'))
-    
-    pref = UserPreference.query.filter_by(user_id=user.id).first()
-    lang = pref.language if pref else 'en'
-    currency = pref.currency if pref else 'ZAR'
-    currency_symbol = get_currency_symbol(currency)
-    
-    if request.method == 'POST':
-        name = request.form.get('name')
-        amount = request.form.get('amount')
-        interest_rate = request.form.get('interest_rate')
-        notes = request.form.get('notes', '')
-        
-        if not name or not amount:
-            flash('Name and amount are required.', 'danger')
-            return redirect(url_for('liabilities'))
-        
-        try:
-            amount = float(amount)
-            interest_rate = float(interest_rate) if interest_rate else None
-        except ValueError:
-            flash('Invalid amount.', 'danger')
-            return redirect(url_for('liabilities'))
-        
-        liability = Liability(
-            user_id=user.id,
-            name=name,
-            amount=amount,
-            interest_rate=interest_rate,
-            notes=notes
-        )
-        db.session.add(liability)
-        db.session.commit()
-        flash('Liability added!', 'success')
-        return redirect(url_for('liabilities'))
-    
-    all_liabilities = Liability.query.filter_by(user_id=user.id).order_by(Liability.date.desc()).all()
-    total_zar = sum(l.amount for l in all_liabilities)
-    total = convert_currency(total_zar, currency)
-    
-    table_rows = ""
-    for l in all_liabilities:
-        interest_display = f"{l.interest_rate}%" if l.interest_rate else "-"
-        l_amount = convert_currency(l.amount, currency)
-        table_rows += f"""
-        <tr>
-            <td>{l.name}</td>
-            <td style="color:#ef4444;">{currency_symbol}{l_amount:.2f}</td>
-            <td>{interest_display}</td>
-            <td>{l.notes or "-"}</td>
-            <td>{l.date.strftime('%Y-%m-%d')}</td>
-        </tr>
-        """
-    
-    page = f"""
-    <h2 style="font-size:28px;font-weight:700;color:var(--text-primary);margin-bottom:20px;">💳 Liabilities</h2>
-    
-    <div class="grid">
-        <div class="stat"><h2 style="color:#ef4444;">{currency_symbol}{total:.2f}</h2><p>Total Liabilities</p></div>
-        <div class="stat"><h2 style="color:#22c55e;">{currency_symbol}{total:.2f}</h2><p>Total Debt</p></div>
-    </div>
-    
-    <div class="card">
-        <h3>Add Liability</h3>
-        <form method="POST">
-            <input type="text" name="name" placeholder="Name (e.g. Student Loan, Car Loan)" required>
-            <input type="number" step="0.01" name="amount" placeholder="Amount" required>
-            <input type="number" step="0.01" name="interest_rate" placeholder="Interest Rate % (optional)">
-            <textarea name="notes" placeholder="Notes" rows="2"></textarea>
-            <button type="submit" class="btn">Add Liability</button>
-        </form>
-    </div>
-    
-    {f'''
-    <div class="card">
-        <table>
-            <thead><tr><th>Name</th><th>Amount</th><th>Interest Rate</th><th>Notes</th><th>Date</th></tr></thead>
-            <tbody>{table_rows}</tbody>
-        </table>
-    </div>
-    ''' if all_liabilities else '<p class="text-muted" style="color:var(--text-muted);">No liabilities yet.</p>'}
-    
-    <a href="/dashboard" class="btn btn-ghost mt-10">{t('back', lang)}</a>
-    """
-    return render_template_string(BASE_HTML, content=page, lang=lang, t=t)
+
+# ----- RUN -----
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
